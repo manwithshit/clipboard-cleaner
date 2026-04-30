@@ -79,27 +79,73 @@ def _classify_line(line: str, in_code_block: bool) -> BlockType:
     return 'normal'
 
 
-def _strip_decorations(line: str) -> str:
-    """去除行首装饰竖线，不碰正文中间的竖线，也不碰表格行。"""
-    # 表格行（两端有 | 或包含多个 |）跳过
-    stripped = line.strip()
-    if stripped.startswith('|') and stripped.endswith('|') and len(stripped) > 2:
-        return line
-    if stripped.count('|') >= 2:
-        return line
+# 行首装饰：引用竖线 | > ｜ │（支持多层嵌套）
+# 匹配形式：> text, > > text, | | text, ｜ ｜ text 等
+_NESTED_QUOTE = re.compile(r'^(\s*)((?:[│｜|>]\s*)+)')
 
-    m = _LINE_START_DECOR.match(line)
-    if m:
-        indent = m.group(1)
-        return indent + _LINE_START_DECOR.sub('', line, count=1).lstrip()
-    return line
+# 单个装饰字符（用于计算嵌套层级）
+_SINGLE_DECOR = re.compile(r'[│｜|>]\s*')
+
+
+def _strip_decorations(line: str) -> tuple[str, int]:
+    """去除行首装饰竖线/大于号，返回 (处理后的行, 嵌套层级)。
+
+    嵌套规则：
+      > 文本        → level 1, "文本"
+      > > 文本      → level 2, "『文本』"
+      > > > 文本    → level 3, "『『文本』』"
+      | | 文本      → 同理
+    """
+    stripped = line.strip()
+
+    # 先尝试匹配嵌套引用模式：行首连续的装饰字符（> > | ｜ │）
+    # 这样可以把 `| | text` 识别为引用而非表格
+    quote_match = _NESTED_QUOTE.match(line)
+    if quote_match:
+        decor = quote_match.group(2)
+        # 判断装饰后的剩余内容是否像表格（有 | 分隔的多列）
+        rest_after_decor = line[quote_match.end():]
+        rest_stripped = rest_after_decor.strip()
+        # 如果装饰后的内容本身包含 | 分隔符（像表格），跳过
+        # 例如 `| col | col |` → decor 只是第一个 `|`，rest 是 `col | col |`
+        # 但如果 decor 覆盖了全部装饰（如 `| | text`），rest 就是纯文本
+        if rest_stripped.count('|') >= 1 and rest_stripped.endswith('|'):
+            # 剩余部分像表格，整行当表格处理
+            return line, 0
+
+        indent = quote_match.group(1)
+        level = len(_SINGLE_DECOR.findall(decor))
+        rest = rest_after_decor
+
+        if level > 1:
+            quotes = '『' * (level - 1)
+            rest = quotes + rest + '』' * (level - 1)
+
+        return indent + rest, level
+
+    # 表格行：两端有 | 且中间有 | 分隔符
+    if stripped.startswith('|') and stripped.endswith('|') and len(stripped) > 2:
+        return line, 0
+    if stripped.count('|') >= 2:
+        return line, 0
+
+    return line, 0
 
 
 def _is_border_line(line: str) -> bool:
-    """判断是否整行都是 ASCII / box drawing 边框字符。"""
+    """判断是否整行都是 ASCII / box drawing 边框字符。
+
+    注意：Markdown 表格分隔行（如 |------|------|）不是边框，
+    需要跳过。判断标准：以 | 开头且以 | 结尾的行视为表格行。
+    """
     stripped = line.strip()
     if len(stripped) < 3:
         return False
+
+    # 跳过表格分隔行：|---|---| 格式
+    if stripped.startswith('|') and stripped.endswith('|'):
+        return False
+
     return bool(_IS_BORDER.match(stripped))
 
 
@@ -256,7 +302,7 @@ def clean(raw_text: str) -> str:
 
         # 去除行首装饰（但代码块内不做）
         if not in_code_block:
-            line = _strip_decorations(line)
+            line, _ = _strip_decorations(line)
 
             # 去掉边框整行
             if _is_border_line(line):
