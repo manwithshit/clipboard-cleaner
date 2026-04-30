@@ -79,12 +79,13 @@ def _classify_line(line: str, in_code_block: bool) -> BlockType:
     return 'normal'
 
 
-# 行首装饰：引用竖线 | > ｜ │（支持多层嵌套）
-# 匹配形式：> text, > > text, | | text, ｜ ｜ text 等
-_NESTED_QUOTE = re.compile(r'^(\s*)((?:[│｜|>]\s*)+)')
+# 行首装饰：引用竖线 | > ｜ │ ▎（支持多层嵌套）
+# ▎ (U+258E LEFT ONE QUARTER BLOCK) 是 Claude Code 的实际引用标记
+# 匹配形式：> text, > > text, | | text, ｜ ｜ text, ▎ text, ▎ ▎ text 等
+_NESTED_QUOTE = re.compile(r'^(\s*)((?:[│｜|>▎]\s*)+)')
 
 # 单个装饰字符（用于计算嵌套层级）
-_SINGLE_DECOR = re.compile(r'[│｜|>]\s*')
+_SINGLE_DECOR = re.compile(r'[│｜|>▎]\s*')
 
 
 def _strip_decorations(line: str) -> tuple[str, int]:
@@ -321,6 +322,23 @@ def clean(raw_text: str) -> str:
     if current_group_type is not None:
         groups.append((current_group_type, current_group_lines))
 
+    # 合并列表项的跨行延续
+    # 例如：list -> normal(缩进文本) -> list → normal 合并到前面的 list
+    merged_groups: list[tuple[BlockType, list[str]]] = []
+    for group_type, group_lines in groups:
+        if (group_type == 'normal'
+                and merged_groups
+                and merged_groups[-1][0] == 'list'
+                and all(not l.strip() or l.startswith((' ', '\t'))
+                        for l in group_lines if l.strip())):
+            # 这是一个纯缩进文本的 normal 组，前面是 list → 合并到 list
+            merged_groups[-1] = ('list',
+                                 merged_groups[-1][1] + group_lines)
+        else:
+            merged_groups.append((group_type, group_lines))
+
+    groups = merged_groups
+
     # Step 4: 按类型处理各组
     result_lines: list[str] = []
 
@@ -387,6 +405,62 @@ def clean(raw_text: str) -> str:
     output = output.strip()
 
     return output
+
+
+# --- 格式特征检测（用于过滤幽灵捕获）---
+
+def has_format_artifacts(text: str) -> bool:
+    """判断文本是否包含 Claude Code / 终端格式痕迹。
+
+    如果内容没有格式痕迹，说明不是从 Claude Code 终端复制的
+    （可能是语音输入、Cmd+A 全选、或其他应用复制的干净文本），
+    不应加入面板列表。
+
+    检测条件（满足任一即可）：
+    1. 所有非空行有 ≥ 2 空格公共缩进
+    2. 存在行首引用装饰（> 、| 、▎ 等）
+    3. 多行以 > 或 ▎ 开头
+    4. 存在 ASCII 边框整行
+    5. 存在 trailing spaces（≥ 2 个行尾空格）
+    6. 存在代码块围栏（``` 或 ~~~）
+    """
+    if not text:
+        return False
+
+    lines = text.split('\n')
+    non_blank = [l for l in lines if l.strip()]
+
+    if len(non_blank) < 1:
+        return False
+
+    # 1. 公共缩进 ≥ 2 空格
+    min_indent = min(len(l) - len(l.lstrip()) for l in non_blank)
+    if min_indent >= 2:
+        return True
+
+    # 2. 行首引用装饰
+    for line in non_blank:
+        stripped = line.lstrip()
+        if stripped.startswith(('> ', '▎ ', '| ', '｜ ', '>')):
+            return True
+
+    # 3. ASCII 边框整行
+    for line in non_blank:
+        stripped = line.strip()
+        if len(stripped) >= 3 and _IS_BORDER.match(stripped):
+            return True
+
+    # 4. Trailing spaces（≥ 2 个）
+    for line in lines:
+        if line.endswith('  ') or line.endswith('\t'):
+            return True
+
+    # 5. 代码块围栏
+    for line in non_blank:
+        if line.strip().startswith(('```', '~~~')):
+            return True
+
+    return False
 
 
 def clean_aggressive(raw_text: str) -> str:

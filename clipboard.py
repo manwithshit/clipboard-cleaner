@@ -14,7 +14,7 @@ from queue import Queue, Empty
 import pyperclip
 
 from model import ClipboardItem, AppState
-from cleaner import clean
+from cleaner import clean, has_format_artifacts
 
 
 def _hash_text(text: str) -> str:
@@ -71,6 +71,11 @@ class ClipboardMonitor:
 
             # 反馈回路抑制：程序刚写入的剪贴板，跳过
             if self.state.is_program_copy():
+                continue
+
+            # 幽灵捕获过滤：没有 Claude Code 格式痕迹的内容不加入列表
+            # 这样可以过滤掉语音输入、Cmd+A 全选、其他应用复制的干净文本
+            if not has_format_artifacts(current):
                 continue
 
             # 去重检查
