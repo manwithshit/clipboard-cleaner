@@ -39,17 +39,81 @@ _TABLE_ROW = re.compile(r'^\s*\|.*\|')
 # 强终止标点（中英文句号、问号、感叹号、冒号后接空行）
 _STRONG_TERMINATOR = re.compile(r'[。！？.!?:：]$')
 
-# 无序列表前缀（用于 aggressive 模式）
-_UNORDERED_PREFIX = re.compile(r'^(\s*)([-*•])\s+')
-_ORDERED_PREFIX = re.compile(r'^(\s*)\d+[.、)\]]\s+')
-
 # 连续空行（3+ 个压成 2 个）
 _MULTI_BLANK = re.compile(r'\n{3,}')
 
 # 单个字符的行（可能是截断产物，但不合并）
 _SINGLE_CHAR_LINE = re.compile(r'^.{0,2}$')
 
+# --- IM 模式行内标记转换 ---
+# 微信/飞书等 IM 不渲染 Markdown，行内 ** / * / ` / [](url) 都是字面字符，
+# 阅读体验差。以下规则把它们转成 IM 中视觉等价的中文符号。
+
+_INLINE_CODE = re.compile(r'`([^`\n]+)`')
+_BOLD_STAR = re.compile(r'\*\*([^*\n]+?)\*\*')
+_BOLD_UNDER = re.compile(r'__([^_\n]+?)__')
+_LINK = re.compile(r'\[([^\]\n]+)\]\(([^)\n]+)\)')
+_ITALIC_STAR = re.compile(r'(?<![\*\w])\*(?!\s)([^*\n]+?)(?<!\s)\*(?![\*\w])')
+_ITALIC_UNDER = re.compile(r'(?<![_\w])_(?!\s)([^_\n]+?)(?<!\s)_(?![_\w])')
+_HEADING_LINE = re.compile(r'^(\s*)#{1,6}\s+(.+?)\s*#*\s*$')
+
+# 占位符用的私有 Unicode 区段，不会出现在正常文本中
+_PLACEHOLDER_OPEN = ''
+_PLACEHOLDER_CLOSE = ''
+
 BlockType = Literal['code', 'list', 'heading', 'table', 'quote', 'blank', 'normal']
+
+
+def _transform_inline(text: str) -> str:
+    """把行内 Markdown 标记转成 IM 视觉等价物。
+
+    顺序：先用占位符保护反引号内的内容，再处理 bold/link/italic，
+    最后把占位符还原为「」。这样可以避免 *italic* 误伤反引号内的星号。
+    """
+    if not text:
+        return text
+
+    # Step 1: 保护反引号内的内容
+    stash: list[str] = []
+
+    def _stash(match: 're.Match[str]') -> str:
+        stash.append(match.group(1))
+        return f'{_PLACEHOLDER_OPEN}{len(stash) - 1}{_PLACEHOLDER_CLOSE}'
+
+    text = _INLINE_CODE.sub(_stash, text)
+
+    # Step 2: bold（必须在 italic 之前，否则 ** 会被 * 吃掉）
+    text = _BOLD_STAR.sub(r'【\1】', text)
+    text = _BOLD_UNDER.sub(r'【\1】', text)
+
+    # Step 3: 链接 [文字](url) → 文字 (url)
+    text = _LINK.sub(r'\1 (\2)', text)
+
+    # Step 4: italic（去星号/下划线，留文字）
+    text = _ITALIC_STAR.sub(r'\1', text)
+    text = _ITALIC_UNDER.sub(r'\1', text)
+
+    # Step 5: 还原反引号内的内容为「」
+    def _restore(match: 're.Match[str]') -> str:
+        idx = int(match.group(1))
+        return f'「{stash[idx]}」'
+
+    text = re.sub(
+        f'{_PLACEHOLDER_OPEN}(\\d+){_PLACEHOLDER_CLOSE}',
+        _restore,
+        text,
+    )
+
+    return text
+
+
+def _transform_heading_line(line: str) -> str:
+    """把 `## 标题` 转成 `【标题】`。保留行首缩进。"""
+    match = _HEADING_LINE.match(line)
+    if not match:
+        return line
+    indent, title = match.group(1), match.group(2)
+    return f'{indent}【{title}】'
 
 
 def _classify_line(line: str, in_code_block: bool) -> BlockType:
@@ -68,9 +132,6 @@ def _classify_line(line: str, in_code_block: bool) -> BlockType:
         return 'heading'
 
     if _TABLE_ROW.match(line):
-        # 检查是否像表格分隔行 (|---|---|)
-        if re.match(r'^[\s\-|:]+$', stripped) and '|' in stripped:
-            return 'table'
         return 'table'
 
     if _UNORDERED_LIST.match(line) or _ORDERED_LIST.match(line):
@@ -482,13 +543,15 @@ def clean(raw_text: str) -> str:
 
     for group_type, group_lines in groups:
         if group_type == 'code':
-            # 代码块：保留内部结构，去掉外层公共缩进
+            # 代码块：保留内部结构，去掉外层公共缩进；
+            # 同时去除围栏行（``` / ~~~），代码内容不做行内变换
             if group_lines:
-                # 去掉所有行的公共缩进
                 indent = _detect_common_indent(group_lines)
                 if indent > 0:
                     group_lines = _remove_common_indent(group_lines, indent)
                 for gl in group_lines:
+                    if _FENCE.match(gl.strip()):
+                        continue  # 围栏行：IM 中无意义，去掉
                     result_lines.append(gl)
 
         elif group_type == 'blank':
@@ -497,10 +560,7 @@ def clean(raw_text: str) -> str:
 
         elif group_type in ('list', 'heading', 'table', 'quote'):
             # 保留结构，只去公共缩进
-            # 但保留列表的缩进层级
             indent = _detect_common_indent(group_lines)
-            # 如果是列表/标题/表格，只去掉异常大的公共缩进
-            # （Claude Code 经常整体加 2 空格）
             if indent >= 2:
                 processed = _remove_common_indent(group_lines, indent)
             else:
@@ -508,36 +568,35 @@ def clean(raw_text: str) -> str:
 
             if group_type == 'table':
                 narrative = _table_to_narrative(processed)
-                result_lines.extend(narrative if narrative is not None else processed)
-            # 列表项内部：如果列表项跨多行，保守合并
+                rows = narrative if narrative is not None else processed
+                result_lines.extend(_transform_inline(r) for r in rows)
             elif group_type == 'list':
                 merged = []
                 for pl in processed:
                     if _UNORDERED_LIST.match(pl) or _ORDERED_LIST.match(pl):
                         merged.append(pl)
                     elif pl.strip() and merged:
-                        # 可能是列表项的延续行，合并到上一项
                         merged[-1] = merged[-1] + ' ' + pl.strip()
                     elif pl.strip():
                         merged.append(pl)
-                result_lines.extend(merged)
-            else:
-                result_lines.extend(processed)
+                result_lines.extend(_transform_inline(m) for m in merged)
+            elif group_type == 'heading':
+                # ## 标题 → 【标题】，再做行内变换
+                for pl in processed:
+                    line = _transform_heading_line(pl)
+                    result_lines.append(_transform_inline(line))
+            else:  # quote
+                result_lines.extend(_transform_inline(p) for p in processed)
 
         elif group_type == 'normal':
-            # 普通段落：去公共缩进 + 保守合并硬换行
+            # 普通段落：去公共缩进 + 保守合并硬换行 + 行内标记转换
             non_blank = [l for l in group_lines if l.strip()]
             if non_blank:
                 indent = _detect_common_indent(non_blank)
                 dedented = _remove_common_indent(non_blank, indent)
                 dedented = _remove_continuation_indent(dedented)
                 merged = _merge_hard_wraps(dedented)
-                result_lines.extend(merged)
-            # 保留组内的空行位置
-            for i, l in enumerate(group_lines):
-                if not l.strip() and i > 0:
-                    # 在组内空行位置插入空行
-                    result_lines.append('')
+                result_lines.extend(_transform_inline(m) for m in merged)
 
     # Step 5: 压缩过多空行（3+ 个压成 2 个）
     output = '\n'.join(result_lines)
@@ -616,19 +675,3 @@ def has_format_artifacts(text: str) -> bool:
             return True
 
     return False
-
-
-def clean_aggressive(raw_text: str) -> str:
-    """激进清洗模式：额外去掉列表标记，尽量压成连续段落。"""
-    result = clean(raw_text)
-    lines = result.split('\n')
-
-    new_lines = []
-    for line in lines:
-        # 去掉无序/有序列表前缀
-        line = _UNORDERED_PREFIX.sub(r'\1', line)
-        line = _ORDERED_PREFIX.sub(r'\1', line)
-        new_lines.append(line)
-
-    # 再去一次硬换行合并
-    return '\n'.join(_merge_hard_wraps([l for l in new_lines if l.strip()] or new_lines)).strip()

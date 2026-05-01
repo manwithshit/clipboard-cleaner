@@ -1,6 +1,4 @@
 下面是命令：
 
-```python
 def hello():
     print("hello")
-```

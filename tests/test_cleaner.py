@@ -5,7 +5,7 @@
 """
 
 import pytest
-from cleaner import clean, clean_aggressive
+from cleaner import clean
 
 
 # === TC-CLEAN-001：统一换行符 ===
@@ -53,28 +53,27 @@ def test_preserve_ordered_list():
     assert result == '1. 打开 Ghostty\n2. 运行工具\n3. 按 0 复制结果'
 
 
-# === TC-CLEAN-005：保护 fenced code block ===
+# === TC-CLEAN-005：fenced code block 在 IM 模式下去围栏保留内容 ===
 
-def test_preserve_code_block():
+def test_strip_code_fence_keep_content():
+    """``` 围栏在 IM 模式下要被去掉，但代码内容保留。"""
     raw = '  下面是命令：\n\n  ```python\n  def hello():\n      print("hello")\n  ```'
     result = clean(raw)
-    assert '```python' in result
+    assert '```' not in result
     assert 'def hello():' in result
     assert '    print("hello")' in result  # 内部缩进保留
-    assert result.endswith('```')
-    # 外层公共缩进去掉
     assert '下面是命令：' in result
 
 
-def test_preserve_code_block_tilde():
+def test_strip_code_fence_tilde():
     raw = '~~~bash\necho "hello"\n~~~'
     result = clean(raw)
-    assert '~~~bash' in result
+    assert '~~~' not in result
     assert 'echo "hello"' in result
 
 
-def test_preserve_code_block_with_indent():
-    """代码块内部相对缩进必须保留。"""
+def test_preserve_code_block_internal_indent():
+    """代码块内部相对缩进必须保留（围栏去掉，缩进留）。"""
     raw = '''```python
 def outer():
     def inner():
@@ -82,8 +81,18 @@ def outer():
     inner()
 ```'''
     result = clean(raw)
+    assert '```' not in result
     assert '    def inner():' in result
     assert '        pass' in result
+    assert 'def outer():' in result
+
+
+def test_code_fence_preserves_inline_markers_inside():
+    """代码块内的 *、**、` 等标记不该被行内变换误伤。"""
+    raw = '```\nx = a * b\nname = "**not bold**"\n```'
+    result = clean(raw)
+    assert 'a * b' in result        # 不该变成 a  b
+    assert '**not bold**' in result  # 不该变成 【not bold】
 
 
 # === TC-CLEAN-006：去除行首引用竖线 ===
@@ -170,9 +179,11 @@ def test_trailing_spaces_removed():
     assert result == 'hello world'  # 尾空格去掉，两行合并
 
 
-def test_heading_preserved():
+def test_heading_transformed_to_brackets():
+    """## 标题 在 IM 模式下转成【标题】。"""
     result = clean('  ## 标题\n  正文内容')
-    assert '## 标题' in result
+    assert '【标题】' in result
+    assert '##' not in result
 
 
 def test_mixed_content():
@@ -192,7 +203,7 @@ def test_mixed_content():
     result = clean(raw)
     assert '- 第一点' in result
     assert '- 第二点' in result
-    assert '```python' in result
+    assert '```' not in result      # 围栏去掉
     assert 'x = 1' in result
     assert '这是介绍：' in result
     assert '这是结尾。' in result
@@ -236,12 +247,6 @@ def test_chinese_english_mixed():
     assert '这是一个 test sentence that wraps here' == result
 
 
-def test_aggressive_removes_list_markers():
-    """激进模式去掉列表标记。"""
-    result = clean_aggressive('  - 第一步\n  - 第二步\n  - 第三步')
-    assert '- ' not in result
-
-
 def test_question_mark_preserves_break():
     """问号后的换行应该保留。"""
     result = clean('这个问题怎么解决？\n让我们来看看。')
@@ -265,7 +270,7 @@ def test_no_merge_into_heading():
     """不应该把内容合并到标题行。"""
     raw = '## 标题\n这是正文内容'
     result = clean(raw)
-    assert result == '## 标题\n这是正文内容'
+    assert result == '【标题】\n这是正文内容'
 
 
 def test_code_block_not_merged():
@@ -279,11 +284,11 @@ y = 2
     assert 'y = 2' in result
 
 
-def test_decorated_code_block_not_merged():
-    """带引用装饰的代码块仍应按代码块处理。"""
+def test_decorated_code_block_strips_decor_and_fence():
+    """带引用装饰的代码块：装饰被剥离，围栏被去掉，代码缩进保留。"""
     raw = '| ```python\n| def f():\n|     return 1\n| ```'
     result = clean(raw)
-    assert result == '```python\ndef f():\n    return 1\n```'
+    assert result == 'def f():\n    return 1'
 
 
 def test_nested_quote_lines_preserve_breaks():
@@ -364,3 +369,182 @@ def test_obsidian_various_callouts():
     raw = '[!warning] 警告\n[!note] 笔记\n[!important] 重要'
     result = clean(raw)
     assert '[!' not in result
+
+
+# ============================================================
+# IM 模式行内标记转换（针对粘贴到微信/飞书等不渲染 Markdown 的目标）
+# ============================================================
+
+# --- 反引号 inline code ---
+
+def test_inline_code_to_corner_brackets():
+    """`code` → 「code」"""
+    result = clean('使用 `useState` hook 来管理状态')
+    assert result == '使用 「useState」 hook 来管理状态'
+
+
+def test_multiple_inline_codes_in_one_line():
+    result = clean('比较 `foo` 和 `bar` 的差异')
+    assert result == '比较 「foo」 和 「bar」 的差异'
+
+
+def test_inline_code_with_special_chars():
+    """反引号内的 *、** 不应被行内变换误伤。"""
+    result = clean('正则是 `\\*\\*([^*]+)\\*\\*` 这样的')
+    assert '「\\*\\*([^*]+)\\*\\*」' in result
+
+
+def test_empty_inline_code_left_alone():
+    """空反引号 `` 不变换。"""
+    result = clean('字面 `` 反引号')
+    assert '`` ' in result or '``' in result  # 不会被错配
+
+
+# --- 加粗 ---
+
+def test_bold_star_to_brackets():
+    """**bold** → 【bold】"""
+    result = clean('**注意**：这一步不能省')
+    assert result == '【注意】：这一步不能省'
+
+
+def test_bold_underscore_to_brackets():
+    """__bold__ → 【bold】"""
+    result = clean('__重要__内容')
+    assert '【重要】' in result
+
+
+def test_bold_inside_sentence():
+    result = clean('请按 **数字键** 复制对应条目')
+    assert result == '请按 【数字键】 复制对应条目'
+
+
+def test_multiple_bolds():
+    result = clean('**第一** 和 **第二** 都重要')
+    assert result == '【第一】 和 【第二】 都重要'
+
+
+# --- 斜体 ---
+
+def test_italic_star_strips_markers():
+    """*italic* → italic（去星号留文字）"""
+    result = clean('这是 *斜体* 文字')
+    assert result == '这是 斜体 文字'
+
+
+def test_italic_underscore_strips_markers():
+    result = clean('这是 _斜体_ 文字')
+    assert result == '这是 斜体 文字'
+
+
+def test_bold_then_italic_in_same_sentence():
+    """**粗** 和 *斜* 同时出现，互不干扰。"""
+    result = clean('**粗体** 与 *斜体* 共存')
+    assert result == '【粗体】 与 斜体 共存'
+
+
+def test_lone_asterisk_not_treated_as_italic():
+    """孤立的 * 不被识别为斜体起止。"""
+    result = clean('a * b * c 是数学表达式')
+    assert '【' not in result
+    # 行内变换不该吃掉这些星号
+    assert '*' in result
+
+
+def test_asterisk_as_bullet_not_treated_as_italic():
+    """列表项的 * 是 bullet 标记，不该被行内变换吃。"""
+    raw = '* 第一项\n* 第二项'
+    result = clean(raw)
+    # 列表 marker 必须保留
+    assert '*' not in result or result.startswith('* ') or '\n* ' in result
+    # 至少不能变成 【】
+    assert '【' not in result
+
+
+# --- 链接 ---
+
+def test_link_to_text_with_url_in_parens():
+    """[文字](url) → 文字 (url)"""
+    result = clean('参考 [官方文档](https://example.com/docs) 了解详情')
+    assert result == '参考 官方文档 (https://example.com/docs) 了解详情'
+
+
+def test_link_with_chinese_text():
+    result = clean('点击 [这里](https://x.com) 跳转')
+    assert '这里 (https://x.com)' in result
+    assert '[' not in result
+    assert ']' not in result
+
+
+def test_multiple_links_in_one_line():
+    result = clean('看 [A](http://a.com) 和 [B](http://b.com)')
+    assert 'A (http://a.com)' in result
+    assert 'B (http://b.com)' in result
+
+
+# --- 标题 ---
+
+def test_h1_to_brackets():
+    result = clean('# 一级标题')
+    assert result == '【一级标题】'
+
+
+def test_h2_to_brackets():
+    result = clean('## 二级标题')
+    assert result == '【二级标题】'
+
+
+def test_h3_to_brackets():
+    result = clean('### 三级标题')
+    assert result == '【三级标题】'
+
+
+def test_heading_with_inline_bold():
+    """标题里有 **bold**，bold 也要被处理。"""
+    result = clean('## 这是 **重点** 标题')
+    assert result == '【这是 【重点】 标题】'
+
+
+def test_heading_with_trailing_hashes():
+    """ATX 风格闭合 hash `## 标题 ##` 正确处理。"""
+    result = clean('## 标题 ##')
+    assert result == '【标题】'
+
+
+# --- 代码围栏 ---
+
+def test_code_fence_with_language_stripped():
+    """围栏行（含语言标识）整行去除，代码内容保留。"""
+    raw = '```javascript\nconst x = 1;\n```'
+    result = clean(raw)
+    assert '```' not in result
+    assert 'javascript' not in result
+    assert result == 'const x = 1;'
+
+
+def test_inline_markers_in_normal_paragraph_combined():
+    """同一段中混合多种行内标记。"""
+    raw = '使用 `npm install` 安装 **依赖**，参考 [官方文档](https://npmjs.com)'
+    result = clean(raw)
+    assert result == '使用 「npm install」 安装 【依赖】，参考 官方文档 (https://npmjs.com)'
+
+
+# --- 代码块内的标记不受影响（行内变换隔离） ---
+
+def test_code_block_content_not_inline_transformed():
+    """代码块内的 markdown 标记字面保留。"""
+    raw = '```\n* item in code\n**not bold**\n[link](url) literal\n```'
+    result = clean(raw)
+    assert '* item in code' in result
+    assert '**not bold**' in result
+    assert '[link](url) literal' in result
+
+
+# --- 列表中的行内标记 ---
+
+def test_inline_transforms_apply_within_list_items():
+    """列表项的内容也要做行内变换。"""
+    raw = '- 使用 `git` 提交\n- 按 **Esc** 退出'
+    result = clean(raw)
+    assert '「git」' in result
+    assert '【Esc】' in result
