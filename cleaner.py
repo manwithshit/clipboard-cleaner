@@ -149,8 +149,59 @@ _NESTED_QUOTE = re.compile(r'^(\s*)((?:[│｜|>▎]\s*)+)')
 _SINGLE_DECOR = re.compile(r'[│｜|>▎]\s*')
 
 # Obsidian callout / admonition 标记：[!tip]、[!note]、[!warning] 等
-# 终端中无法渲染，清洗时应去掉
+# 终端中无法渲染，清洗时把整行转成 `## 标签`（再由 heading 处理转 【标签】）
 _OBSIDIAN_CALLOUT = re.compile(r'^\[![a-zA-Z]+\]\s*')
+
+
+# YAML front-matter 检测
+# 标准形式：---\nkey: value\n---
+# 伪形式：---  key: value\n  key: value\n  key: value（GPT/Claude 偶尔输出）
+_FRONTMATTER_DELIM = re.compile(r'^---\s*$')
+_PSEUDO_FRONTMATTER_HEAD = re.compile(r'^---\s+["\']?[\w-]+["\']?\s*:')
+
+
+def _strip_frontmatter(lines: list[str]) -> list[str]:
+    """剥离文本开头的 YAML front-matter（标准或伪格式）。
+
+    标准：第一行是 `---`，到下一行 `---` 之间整段消除（含两个分隔符）。
+    伪格式：第一行是 `---  title: "..."`（GPT 误把 `---` 和首字段写一行），
+            从该行开始消除直到第一个空行（含开头那行）。
+    """
+    if not lines:
+        return lines
+
+    # 标准 YAML
+    if _FRONTMATTER_DELIM.match(lines[0].strip()):
+        for i in range(1, len(lines)):
+            if _FRONTMATTER_DELIM.match(lines[i].strip()):
+                return lines[i + 1:]
+        # 没找到收尾分隔符，保持原样
+        return lines
+
+    # 伪 front-matter：--- 跟在同一行的 key: value
+    if _PSEUDO_FRONTMATTER_HEAD.match(lines[0]):
+        for i in range(1, len(lines)):
+            if not lines[i].strip():
+                return lines[i + 1:]
+        # 全是 front-matter 内容，全部消除
+        return []
+
+    return lines
+
+
+def _process_callout(text: str) -> str:
+    """把 `[!type] 标签文字` 转成 `## 标签文字`，纯标记则返回空字符串。
+
+    转成 `## ` 是为了后续 heading 分类把它正确包成 `【 】` 并独立成行，
+    不被合并到下一行内容里。
+    """
+    match = _OBSIDIAN_CALLOUT.match(text)
+    if not match:
+        return text
+    label = text[match.end():].strip()
+    if label:
+        return '## ' + label
+    return ''
 
 _CODE_DECOR = re.compile(r'^(\s*)((?:[│｜|>▎] ?)+)(.*)$')
 
@@ -185,8 +236,10 @@ def _strip_decorations(line: str) -> tuple[str, int]:
         level = len(_SINGLE_DECOR.findall(decor))
         rest = rest_after_decor
 
-        # 去掉 Obsidian callout 标记（终端不可见）
-        rest = _OBSIDIAN_CALLOUT.sub('', rest)
+        # Obsidian callout：[!tip] 标签 → ## 标签（独立成行）
+        if _OBSIDIAN_CALLOUT.match(rest.lstrip()):
+            rest = _process_callout(rest.lstrip())
+            return indent + rest, level
 
         if level > 1:
             quotes = '『' * (level - 1)
@@ -200,9 +253,9 @@ def _strip_decorations(line: str) -> tuple[str, int]:
     if stripped.count('|') >= 2:
         return line, 0
 
-    # 去掉 Obsidian callout 标记（无引用装饰的裸 callout）
+    # 裸 Obsidian callout：[!tip] 标签 → ## 标签
     if _OBSIDIAN_CALLOUT.match(stripped):
-        return _OBSIDIAN_CALLOUT.sub('', stripped), 0
+        return _process_callout(stripped), 0
 
     return line, 0
 
@@ -260,6 +313,12 @@ def _should_keep_break(prev_line: str, next_line: str) -> bool:
             or next_stripped.startswith('- - -')
             or next_stripped.startswith('---')):
         return True
+
+    # CJK 中文段落里的硬换行：上一行以 CJK 字符结尾且没有强终止标点
+    # → 合并（即使下一行以英文大写字母开头，例如 "详见这个\nGitHub Issue"）
+    last_char = prev_stripped[-1]
+    if '一' <= last_char <= '鿿':
+        return False
 
     # 下一行以大写字母开头（英文新句子的可能性）→ 保留
     if next_stripped[0].isupper() and len(next_stripped) > 1:
@@ -324,6 +383,50 @@ def _merge_hard_wraps(lines: list[str]) -> list[str]:
                 current = current + next_line
 
     result.append(current)
+    return result
+
+
+def _unwrap_nested_quote(line: str) -> tuple[str, int]:
+    """把 `『『text』』` 拆成 (text, level)，没有包裹则 level=0。"""
+    stripped = line.strip()
+    level = 0
+    while stripped.startswith('『') and stripped.endswith('』'):
+        stripped = stripped[1:-1]
+        level += 1
+    return stripped, level
+
+
+def _merge_nested_quote_group(lines: list[str]) -> list[str]:
+    """合并嵌套引用组：同层级的连续行先合并，整段重包 `『 』`。
+
+    单层引用行（level=0，已被 strip_decorations 还原）保持不变。
+    """
+    pairs = [_unwrap_nested_quote(l) for l in lines if l.strip()]
+    if not pairs:
+        return []
+
+    result: list[str] = []
+    i = 0
+    while i < len(pairs):
+        text, level = pairs[i]
+        if level == 0:
+            result.append(text)
+            i += 1
+            continue
+        # 收集连续同层级的非空行
+        chunk = [text]
+        j = i + 1
+        while j < len(pairs) and pairs[j][1] == level:
+            chunk.append(pairs[j][0])
+            j += 1
+        # 用硬换行规则合并
+        merged = _merge_hard_wraps(chunk)
+        # 整体重包同层 `『 』`
+        wrapper_open = '『' * level
+        wrapper_close = '』' * level
+        for m in merged:
+            result.append(wrapper_open + m + wrapper_close)
+        i = j
     return result
 
 
@@ -400,17 +503,8 @@ def _normalize_table_cell(cell: str) -> str:
     return re.sub(r'\s+', ' ', cell.replace('<br>', '；').replace('<br/>', '；')).strip()
 
 
-def _table_to_narrative(lines: list[str]) -> list[str] | None:
-    """把规整 Markdown 表格转成数字条目列表。"""
-    rows = [_split_markdown_table_row(line) for line in lines if line.strip()]
-    if any(row is None for row in rows) or len(rows) < 3:
-        return None
-
-    parsed_rows = [row for row in rows if row is not None]
-    headers = [_normalize_table_cell(cell) for cell in parsed_rows[0]]
-    if not _is_markdown_table_separator(parsed_rows[1]):
-        return None
-
+def _rows_to_narrative(headers: list[str], data_rows: list[list[str]]) -> list[str] | None:
+    """把表头 + 数据行组合成数字条目列表。"""
     headers = [
         header if header else f'列{i + 1}' for i, header in enumerate(headers)
     ]
@@ -419,7 +513,7 @@ def _table_to_narrative(lines: list[str]) -> list[str] | None:
 
     result: list[str] = []
     item_index = 1
-    for row in parsed_rows[2:]:
+    for row in data_rows:
         cells = [_normalize_table_cell(cell) for cell in row]
         if len(cells) > len(headers):
             cells = cells[:len(headers) - 1] + [' '.join(cells[len(headers) - 1:])]
@@ -445,6 +539,79 @@ def _table_to_narrative(lines: list[str]) -> list[str] | None:
     return result if result else None
 
 
+def _table_to_narrative(lines: list[str]) -> list[str] | None:
+    """把规整 Markdown pipe 表格转成数字条目列表。"""
+    rows = [_split_markdown_table_row(line) for line in lines if line.strip()]
+    if any(row is None for row in rows) or len(rows) < 3:
+        return None
+
+    parsed_rows = [row for row in rows if row is not None]
+    headers = [_normalize_table_cell(cell) for cell in parsed_rows[0]]
+    if not _is_markdown_table_separator(parsed_rows[1]):
+        return None
+
+    return _rows_to_narrative(headers, parsed_rows[2:])
+
+
+# Box-drawing 表格识别
+_BOX_DATA_OPEN = set('│┃')          # 数据行的左右边界
+_BOX_BORDER_OPEN = set('┌┏├┝└┗')   # 上/中/下边框的起始字符
+_BOX_BORDER_CLOSE = set('┐┓┤┥┘┛')  # 上/中/下边框的结束字符
+_BOX_BORDER_INNER = set(
+    '─━═│┃┌┏┐┓└┗┘┛├┝┤┥┨┩┪┫┬┭┮┯┰┱┲┳┴┵┶┷┸┹┺┻'
+    '┼┽┾┿╀╁╂╃╄╅╆╇╈╉╊╋║'
+)
+
+
+def _is_box_table_line(line: str) -> bool:
+    """判断是否是 box-drawing 表格的数据行或边框行。
+
+    数据行：│ a │ b │ 形式（U+2502 或 U+2503 包裹）
+    边框行：┌─┬─┐ / ├─┼─┤ / └─┴─┘ 形式
+    """
+    stripped = line.strip()
+    if len(stripped) < 3:
+        return False
+
+    first, last = stripped[0], stripped[-1]
+
+    # 数据行
+    if first in _BOX_DATA_OPEN and last in _BOX_DATA_OPEN:
+        return True
+
+    # 边框行
+    if first in _BOX_BORDER_OPEN and last in _BOX_BORDER_CLOSE:
+        # 整行只能由边框字符 + 空白组成
+        return all(c in _BOX_BORDER_INNER or c.isspace() for c in stripped)
+
+    return False
+
+
+def _box_table_to_narrative(lines: list[str]) -> list[str] | None:
+    """把 box-drawing 表格转成数字条目列表。"""
+    data_rows: list[list[str]] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # 跳过纯边框行
+        if stripped[0] in _BOX_BORDER_OPEN and stripped[-1] in _BOX_BORDER_CLOSE:
+            continue
+        # 数据行：把 │ ┃ 都规范化成 |
+        if stripped[0] in _BOX_DATA_OPEN and stripped[-1] in _BOX_DATA_OPEN:
+            normalized = re.sub(r'[│┃]', '|', stripped)
+            cells = [c.strip() for c in normalized.strip('|').split('|')]
+            if cells:
+                data_rows.append(cells)
+
+    if len(data_rows) < 2:
+        return None
+
+    headers = [_normalize_table_cell(c) for c in data_rows[0]]
+    body = data_rows[1:]
+    return _rows_to_narrative(headers, body)
+
+
 def clean(raw_text: str) -> str:
     """保守清洗管线主入口。
 
@@ -460,6 +627,9 @@ def clean(raw_text: str) -> str:
 
     # Step 1: 标准化换行符
     lines = raw_text.replace('\r\n', '\n').replace('\r', '\n').split('\n')
+
+    # Step 1b: 剥离开头的 YAML front-matter（IM 不需要 metadata）
+    lines = _strip_frontmatter(lines)
 
     # Step 2: 去尾空格（所有行）
     lines = [line.rstrip() for line in lines]
@@ -482,6 +652,11 @@ def clean(raw_text: str) -> str:
         if in_code_block:
             if code_block_decorated:
                 line, quote_level = _strip_code_decorations(line)
+            line_type = _classify_line(line, in_code_block)
+        elif _is_box_table_line(line):
+            # Box-drawing 表格（│ data │ 或 ┌─┬─┐）优先级最高：
+            # 跳过引用剥离和边框删除，直接进入 table 组让后续转条目
+            line_type = 'table'
         else:
             line, quote_level = _strip_decorations(line)
 
@@ -489,10 +664,10 @@ def clean(raw_text: str) -> str:
             if _is_border_line(line):
                 line = ''
 
-        line_type = _classify_line(line, in_code_block)
+            line_type = _classify_line(line, in_code_block)
 
-        if quote_level > 1 and line_type == 'normal':
-            line_type = 'quote'
+            if quote_level > 1 and line_type == 'normal':
+                line_type = 'quote'
 
         # 处理 fenced code block 边界
         if line_type == 'code' and _FENCE.match(line.strip()):
@@ -568,7 +743,29 @@ def clean(raw_text: str) -> str:
 
             if group_type == 'table':
                 narrative = _table_to_narrative(processed)
-                rows = narrative if narrative is not None else processed
+                if narrative is None:
+                    narrative = _box_table_to_narrative(processed)
+                if narrative is not None:
+                    rows = narrative
+                elif any(_is_box_table_line(p) for p in processed):
+                    # Box-drawing 表格但行数不足以转条目（如单行装饰边框）：
+                    # 去掉边框行，把数据行的单元格内容提取出来
+                    rows = []
+                    for p in processed:
+                        stripped = p.strip()
+                        if not stripped:
+                            continue
+                        if stripped[0] in _BOX_BORDER_OPEN and stripped[-1] in _BOX_BORDER_CLOSE:
+                            continue
+                        if stripped[0] in _BOX_DATA_OPEN and stripped[-1] in _BOX_DATA_OPEN:
+                            normalized = re.sub(r'[│┃]', '|', stripped)
+                            cells = [c.strip() for c in normalized.strip('|').split('|') if c.strip()]
+                            if cells:
+                                rows.append(' '.join(cells))
+                        else:
+                            rows.append(p)
+                else:
+                    rows = processed
                 result_lines.extend(_transform_inline(r) for r in rows)
             elif group_type == 'list':
                 merged = []
@@ -586,7 +783,9 @@ def clean(raw_text: str) -> str:
                     line = _transform_heading_line(pl)
                     result_lines.append(_transform_inline(line))
             else:  # quote
-                result_lines.extend(_transform_inline(p) for p in processed)
+                # 嵌套引用：unwrap → merge → rewrap，避免每行各包一对 『 』
+                merged_quotes = _merge_nested_quote_group(processed)
+                result_lines.extend(_transform_inline(q) for q in merged_quotes)
 
         elif group_type == 'normal':
             # 普通段落：去公共缩进 + 保守合并硬换行 + 行内标记转换

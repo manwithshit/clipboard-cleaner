@@ -125,6 +125,7 @@ def test_remove_border():
     result = clean(raw)
     assert '┌' not in result  # top-left corner gone
     assert '└' not in result  # bottom-left corner gone
+    assert '│' not in result  # 单元格竖线也去掉
     assert '内容' in result
 
 
@@ -291,11 +292,11 @@ def test_decorated_code_block_strips_decor_and_fence():
     assert result == 'def f():\n    return 1'
 
 
-def test_nested_quote_lines_preserve_breaks():
-    """嵌套引用的每一行不应被普通段落合并揉平。"""
-    raw = '> > 第一行\n> > 第二行'
+def test_nested_quote_lines_merged_into_one_wrap():
+    """嵌套引用：连续同层级的行先合并，整段包一对 『 』。"""
+    raw = '> > 第一行，\n> > 第二行。'
     result = clean(raw)
-    assert result == '『第一行』\n『第二行』'
+    assert result == '『第一行，第二行。』'
 
 
 def test_dedup_same_raw_hash():
@@ -347,12 +348,12 @@ def test_long_wrapped_chinese_with_breaks():
     assert result == expected
 
 
-def test_obsidian_callout_stripped():
-    """Obsidian callout 标记 [!tip] 应被去除。"""
+def test_obsidian_callout_to_label_heading():
+    """Obsidian callout [!tip] 标签 → 【标签】（独立成行的标题）。"""
     raw = '[!tip] 这是一个提示'
     result = clean(raw)
     assert '[!tip]' not in result
-    assert result == '这是一个提示'
+    assert result == '【这是一个提示】'
 
 
 def test_obsidian_callout_with_quote_decor():
@@ -548,3 +549,206 @@ def test_inline_transforms_apply_within_list_items():
     result = clean(raw)
     assert '「git」' in result
     assert '【Esc】' in result
+
+
+# ============================================================
+# Bug 1: Callout 标签独立成行
+# ============================================================
+
+def test_callout_with_label_and_following_content():
+    """[!tip] 小贴士 + 内容行 → 标签独立成 【】，内容独立段落。"""
+    raw = '> [!tip] 小贴士\n> 使用 `clean()` 前先备份'
+    result = clean(raw)
+    lines = result.split('\n')
+    assert '【小贴士】' in lines
+    # 确保标签和内容不被压在一起
+    assert not any(line == '小贴士使用 「clean()」 前先备份' for line in lines)
+    # 内容应该出现在另一行
+    assert any('「clean()」' in line and '小贴士' not in line for line in lines)
+
+
+def test_callout_warning_to_label():
+    raw = '[!warning] 危险操作'
+    result = clean(raw)
+    assert result == '【危险操作】'
+
+
+def test_callout_without_label_disappears():
+    """[!info] 后面没有标签文字 → 整行消失。"""
+    raw = '[!info]\n正文内容'
+    result = clean(raw)
+    assert '[!info]' not in result
+    assert result == '正文内容'
+
+
+def test_callout_inline_inside_label():
+    """callout 标签里的 ` 也走行内变换。"""
+    raw = '[!tip] 使用 `git` 命令'
+    result = clean(raw)
+    assert result == '【使用 「git」 命令】'
+
+
+# ============================================================
+# Bug 2: CJK 末尾 + 英文大写专有名词合并
+# ============================================================
+
+def test_cjk_suffix_then_uppercase_merges():
+    """中文末尾无终止标点 + 下一行英文大写专有名词 → 合并。"""
+    result = clean('详见这个\nGitHub Issue。')
+    assert result == '详见这个 GitHub Issue。'
+
+
+def test_cjk_suffix_then_uppercase_api():
+    result = clean('请调用我们的\nAPI 接口')
+    assert result == '请调用我们的 API 接口'
+
+
+def test_cjk_with_terminator_still_breaks_before_uppercase():
+    """中文末尾有句号时，下一行大写仍保留换行。"""
+    result = clean('这是一段。\nGitHub is great.')
+    assert result == '这是一段。\nGitHub is great.'
+
+
+def test_english_uppercase_break_still_preserved():
+    """纯英文场景，大写规则仍然生效（防止 CJK fix 过度）。"""
+    result = clean('end of sentence\nNew sentence starts')
+    # 没有终止标点但下一行大写 → 仍保留（英文场景）
+    assert result == 'end of sentence\nNew sentence starts'
+
+
+# ============================================================
+# UX A: front-matter 兜底
+# ============================================================
+
+def test_standard_yaml_frontmatter_stripped():
+    raw = '---\ntitle: foo\ndate: 2026-05-01\n---\n正文内容'
+    result = clean(raw)
+    assert 'title' not in result
+    assert 'date' not in result
+    assert result == '正文内容'
+
+
+def test_pseudo_frontmatter_stripped():
+    """GPT 偶尔写 ---  title: "..." 同行的伪 front-matter 也要消除。"""
+    raw = '---  title: "示例"\n    date: 2026-05-01\n    tags: [a, b]\n\n正文'
+    result = clean(raw)
+    assert 'title' not in result
+    assert 'date' not in result
+    assert 'tags' not in result
+    assert result == '正文'
+
+
+def test_frontmatter_only_stripped_at_start():
+    """文档中间的 --- key: value 不能被误识别为 front-matter。"""
+    raw = '正文开始\n\n--- some text key: value\n后续内容'
+    result = clean(raw)
+    # 中间的 `---` 整行作为 border 处理（去掉）
+    # 但 `key: value` 不会被当成 front-matter 整段消除
+    assert '正文开始' in result
+
+
+def test_frontmatter_unclosed_kept():
+    """开头是 --- 但找不到收尾 ---，保留原样不强删。"""
+    raw = '---\nincomplete\nstill incomplete'
+    result = clean(raw)
+    # 没有收尾 ---，保持
+    assert 'incomplete' in result
+
+
+# ============================================================
+# UX B: 嵌套引用合并跨行
+# ============================================================
+
+def test_nested_quote_two_lines_merged():
+    raw = '> > 第一行，\n> > 第二行。'
+    result = clean(raw)
+    assert result == '『第一行，第二行。』'
+
+
+def test_nested_quote_three_levels():
+    raw = '> > > 三层第一行，\n> > > 三层第二行。'
+    result = clean(raw)
+    assert result == '『『三层第一行，三层第二行。』』'
+
+
+def test_nested_quote_with_terminator_keeps_break():
+    """嵌套引用内有强终止标点的换行仍保留（合并规则一致）。"""
+    raw = '> > 第一句。\n> > 第二句。'
+    result = clean(raw)
+    # 各自包，但每行独立（因为 。 是强终止）
+    assert '『第一句。』' in result
+    assert '『第二句。』' in result
+
+
+def test_single_quote_still_works():
+    """单层引用仍然合并跨行（旧行为）。"""
+    raw = '> 第一行，\n> 第二行。'
+    result = clean(raw)
+    assert result == '第一行，第二行。'
+
+
+# ============================================================
+# 新增: ASCII / box-drawing 表格转数字条目
+# ============================================================
+
+def test_box_drawing_table_to_narrative():
+    raw = '''┌───────┬───────┬───────┐
+│ 类别  │ 数量  │ 总和  │
+├───────┼───────┼───────┤
+│ 源码  │ 5     │ ~960  │
+├───────┼───────┼───────┤
+│ 文档  │ 2     │ ~490  │
+└───────┴───────┴───────┘'''
+    result = clean(raw)
+    assert '1. 类别：源码' in result
+    assert '   数量：5' in result
+    assert '   总和：~960' in result
+    assert '2. 类别：文档' in result
+    assert '┌' not in result
+    assert '│' not in result
+    assert '├' not in result
+    assert '└' not in result
+
+
+def test_box_drawing_table_with_indent():
+    """带 2 空格公共缩进的 box 表格也能正确解析。"""
+    raw = '''  ┌───────┬───────┐
+  │ K     │ V     │
+  ├───────┼───────┤
+  │ a     │ 1     │
+  ├───────┼───────┤
+  │ b     │ 2     │
+  └───────┴───────┘'''
+    result = clean(raw)
+    assert '1. K：a' in result
+    assert '2. K：b' in result
+
+
+def test_box_drawing_single_data_row_fallback():
+    """只有一行数据的装饰性 box：边框去掉，内容平铺保留。"""
+    raw = '┌─────────┐\n│ 仅一行  │\n└─────────┘'
+    result = clean(raw)
+    assert '仅一行' in result
+    assert '┌' not in result
+    assert '│' not in result
+
+
+def test_box_drawing_with_chinese_content():
+    """CJK 列宽对齐空格在解析时被正确去除。"""
+    raw = '''┌───────────────┬────────┐
+│     类别      │ 数量   │
+├───────────────┼────────┤
+│ 中文条目1     │ 100    │
+├───────────────┼────────┤
+│ 中文条目2     │ 200    │
+└───────────────┴────────┘'''
+    result = clean(raw)
+    assert '类别：中文条目1' in result
+    assert '数量：100' in result
+
+
+def test_markdown_table_still_works():
+    """改动不能破坏 Markdown 表格的处理。"""
+    raw = '| 列 A | 列 B |\n|------|------|\n| 值 1 | 值 2 |'
+    result = clean(raw)
+    assert result == '1. 列 A：值 1\n   列 B：值 2'
