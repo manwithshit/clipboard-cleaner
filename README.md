@@ -25,7 +25,7 @@ This is a known and widely-reported bug — see the umbrella issue **[anthropics
 | **VSCode** | Every paste needs Select All → Shift+Tab to manually remove the indent. |
 | **WeChat / Feishu / Slack DMs** | Many IMs don't render Markdown at all, so `**bold**`, `` `code` ``, `## heading` show as literal characters — ugly and unreadable. |
 
-The community workarounds (e.g., adding `"use \\ for line continuations"` to `CLAUDE.md`) **cost tokens on every session**. Tools like [`claude-fix`](https://github.com/freyjay/claude-code-command-fix) offer one-shot CLI cleaning. This project takes a different angle:
+The community workarounds (e.g., adding `"use \\ for line continuations"` to `CLAUDE.md`) **cost tokens on every session**. This project takes a different angle:
 
 ## How this tool solves it
 
@@ -154,10 +154,6 @@ python3 -m pytest tests/ -v
 1. With a 0.2s poll interval, very rapid copy-A-then-copy-B sequences may miss A.
 2. Extremely short Claude outputs with no formatting fingerprints get filtered out by design (preferring "miss" over "false-positive on voice input").
 3. macOS-only — Windows / Linux untested.
-
-## Related work
-
-- [`claude-fix`](https://github.com/freyjay/claude-code-command-fix) — one-shot CLI text cleaner. Different shape (manual invocation), same root cause.
 
 ## License
 
