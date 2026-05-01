@@ -752,3 +752,40 @@ def test_markdown_table_still_works():
     raw = '| 列 A | 列 B |\n|------|------|\n| 值 1 | 值 2 |'
     result = clean(raw)
     assert result == '1. 列 A：值 1\n   列 B：值 2'
+
+
+# ============================================================
+# Claude Code 前缀标记 ⏺ ⎿ 剥离 + 紧贴的伪 front-matter
+# ============================================================
+
+def test_cc_bullet_prefix_stripped():
+    """Claude Code 输出气泡 bullet ⏺ 被剥掉。"""
+    result = clean('⏺ 这是一段输出')
+    assert '⏺' not in result
+    assert result == '这是一段输出'
+
+
+def test_cc_continuation_prefix_stripped():
+    """Claude Code 续行 marker ⎿ 也被剥掉。"""
+    result = clean('⎿ 这是续行内容')
+    assert '⎿' not in result
+    assert result == '这是续行内容'
+
+
+def test_pseudo_frontmatter_no_space_after_dashes():
+    """`---title:`（没有空格）也应识别为伪 front-matter。"""
+    raw = '---title: 文档\n  date: 2026-05-01\n\n正文'
+    result = clean(raw)
+    assert 'title' not in result
+    assert 'date' not in result
+    assert result == '正文'
+
+
+def test_cc_prefix_plus_pseudo_frontmatter():
+    """实战组合：⏺ 前缀 + 紧贴的 ---title: 伪 front-matter 整体剥除。"""
+    raw = '⏺ ---title: 测试\n  date: 2026-05-01\n\n正文内容'
+    result = clean(raw)
+    assert '⏺' not in result
+    assert 'title' not in result
+    assert 'date' not in result
+    assert result == '正文内容'

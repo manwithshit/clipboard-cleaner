@@ -153,11 +153,20 @@ _SINGLE_DECOR = re.compile(r'[│｜|>▎]\s*')
 _OBSIDIAN_CALLOUT = re.compile(r'^\[![a-zA-Z]+\]\s*')
 
 
+# Claude Code 终端输出的前缀标记（⏺ ⎿）— 复制时会跟着进剪贴板，
+# 这是 Claude Code TUI 自己加的"输出气泡 bullet"，对 IM 粘贴毫无用处。
+_CC_PREFIX_MARKER = re.compile(r'^([⏺⎿])\s*')
+
 # YAML front-matter 检测
 # 标准形式：---\nkey: value\n---
-# 伪形式：---  key: value\n  key: value\n  key: value（GPT/Claude 偶尔输出）
+# 伪形式：---  key: value 或 ---key: value（GPT/Claude 偶尔输出）
 _FRONTMATTER_DELIM = re.compile(r'^---\s*$')
-_PSEUDO_FRONTMATTER_HEAD = re.compile(r'^---\s+["\']?[\w-]+["\']?\s*:')
+_PSEUDO_FRONTMATTER_HEAD = re.compile(r'^---\s*["\']?[\w-]+["\']?\s*:')
+
+
+def _strip_cc_prefix(lines: list[str]) -> list[str]:
+    """去除 Claude Code 输出行的前缀标记 ⏺ / ⎿。"""
+    return [_CC_PREFIX_MARKER.sub('', line) for line in lines]
 
 
 def _strip_frontmatter(lines: list[str]) -> list[str]:
@@ -627,6 +636,9 @@ def clean(raw_text: str) -> str:
 
     # Step 1: 标准化换行符
     lines = raw_text.replace('\r\n', '\n').replace('\r', '\n').split('\n')
+
+    # Step 1a: 去除 Claude Code 输出前缀标记（⏺ ⎿）
+    lines = _strip_cc_prefix(lines)
 
     # Step 1b: 剥离开头的 YAML front-matter（IM 不需要 metadata）
     lines = _strip_frontmatter(lines)

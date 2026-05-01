@@ -42,7 +42,8 @@
 | ASCII / box drawing 边框整行 | `_IS_BORDER` 全行匹配 | **整行删除**（box-drawing 表格走更高优先级） |
 | 水平分割线 `---` `***` | 落入边框规则 | 删除（IM 中没意义，靠空行已经能分段） |
 | Obsidian callout `[!tip] 标签` | `_process_callout` | 转 `## 标签` → 最终渲染为 `【标签】` 独立成行；纯 `[!info]` 无标签则整行消除 |
-| YAML front-matter `---\nkey: val\n---` | `_strip_frontmatter` 在 `clean()` 入口剥除 | 标准格式整段消除；GPT 误生成的伪格式（`---  title: ...` 同行）也兜底消除直到首个空行 |
+| YAML front-matter `---\nkey: val\n---` | `_strip_frontmatter` 在 `clean()` 入口剥除 | 标准格式整段消除；GPT 误生成的伪格式（`---  title: ...` 或紧贴的 `---title: ...`）也兜底消除直到首个空行 |
+| Claude Code 输出前缀 `⏺` `⎿` | `_strip_cc_prefix` 在 `clean()` 入口剥除 | 终端输出气泡 bullet，复制时被一起拷走；进 IM 没意义，整体去掉 |
 | 普通段落 | 其他 | 去公共缩进 + 保守合并硬换行 + 行内变换 |
 | 空行 | 全空白 | 连续多空行压成 1 空行（首尾空行去掉） |
 
