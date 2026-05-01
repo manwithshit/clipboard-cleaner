@@ -1,56 +1,78 @@
 # Clipboard Cleaner
 
-> macOS 终端剪贴板清洗面板 — 把 Claude Code / Ghostty 复制出来的文本，自动整理成可以直接粘到**微信、飞书、Slack** 等聊天工具里的干净格式。
+**English** · [中文](README.zh-CN.md)
 
-## 解决什么问题
+> A macOS clipboard cleaner panel for [Claude Code](https://claude.com/claude-code) / Ghostty users. Auto-strips the formatting artifacts (hard wraps, 2-space indents, quote bars, ASCII borders) that ruin every copy/paste from the terminal.
 
-在 Ghostty 终端里使用 Claude Code CLI 时，TUI 渲染器会主动在终端宽度处插入**硬换行**和 **2 空格缩进**。窗口被 split pane 后宽度更窄，复制出来的内容更碎。直接粘到微信/飞书会变成支离破碎的一堆碎片。
+![UI demo](docs/images/ui-demo.png)
 
-而且——微信和飞书**不渲染 Markdown**。Claude 输出的 `` `code` ``、`**加粗**`、`[链接](url)`、`## 标题`、` ```代码块``` ` 这些标记，在 IM 里全是字面字符，丑且难读。
+## Why this exists
 
-这个工具会：
+If you use Claude Code CLI, you've almost certainly hit this:
 
-1. **自动**捕获你在 Ghostty 里复制 / 鼠标选中 / Cmd+A 全选的内容
-2. **保守**清洗硬换行、引用竖线、缩进、ASCII 边框等终端格式噪音
-3. 把 Markdown 行内标记**转成 IM 视觉等价物**：
+> **Claude Code prepends a 2-space indent to every output line and inserts hard line breaks at ~80 characters.** These artifacts are baked into the clipboard. Every copy/paste needs manual cleanup.
 
-   | 原始 | 清洗后 |
+This is a known and widely-reported bug — see the umbrella issue **[anthropics/claude-code#15199](https://github.com/anthropics/claude-code/issues/15199)** and its many duplicates ([#6827](https://github.com/anthropics/claude-code/issues/6827), [#859](https://github.com/anthropics/claude-code/issues/859), [#13378](https://github.com/anthropics/claude-code/issues/13378), and more, with hundreds of upvotes combined). Not yet fixed upstream.
+
+**Where it bites globally** — the workflow disruption is the same regardless of language:
+
+| Where you paste | The pain |
+|---|---|
+| **Slack / Discord** | Even though they render Markdown, the hard wraps shred code blocks on narrow screens — barely readable. |
+| **GitHub PR / Issue comments** | `>` quote bars and stray spaces sneak in, looking unprofessional. |
+| **Back into the terminal** | The worst case. A long command with hard wraps gets pasted as two lines, fails silently. |
+| **Notion / Obsidian** | The 2-space indent gets misinterpreted as code blocks or block quotes — formatting is destroyed. |
+| **VSCode** | Every paste needs Select All → Shift+Tab to manually remove the indent. |
+| **WeChat / Feishu / Slack DMs** | Many IMs don't render Markdown at all, so `**bold**`, `` `code` ``, `## heading` show as literal characters — ugly and unreadable. |
+
+The community workarounds (e.g., adding `"use \\ for line continuations"` to `CLAUDE.md`) **cost tokens on every session**. Tools like [`claude-fix`](https://github.com/freyjay/claude-code-command-fix) offer one-shot CLI cleaning. This project takes a different angle:
+
+## How this tool solves it
+
+1. **Background daemon** — runs in a Ghostty pane, polls the clipboard every 0.2s
+2. **Smart capture** — only ingests text with terminal formatting fingerprints (hard wraps, indent, quote bars). Plain typing/voice input is ignored.
+3. **Conservative cleaning** — strips hard wraps, quote bars, indents, ASCII borders. **Never destroys** the internal structure of code blocks, lists, or tables.
+4. **Inline Markdown decoration transforms** — for messengers that don't render Markdown:
+
+   | Original | Cleaned |
    |---|---|
    | `` `code` `` | `「code」` |
-   | `**加粗**` | `【加粗】` |
-   | `*斜体*` | `斜体` |
-   | `[文字](url)` | `文字 (url)` |
-   | `## 标题` | `【标题】` |
-   | ` ```围栏``` ` | （围栏行去除，代码内容保留） |
-   | Markdown 表格 | 数字条目列表 |
-   | 水平分割线 `---` | 去除 |
-   | YAML front-matter | 去除 |
+   | `**bold**` | `【bold】` |
+   | `*italic*` | `italic` (markers removed) |
+   | `[text](url)` | `text (url)` |
+   | `## heading` | `【heading】` |
+   | ` ```fenced``` ` | Fence removed, code body kept |
+   | Markdown table | Numbered narrative items |
+   | Box-drawing table `┌─┬─┐` | Same — converted to numbered items |
+   | YAML front-matter | Removed |
+   | Horizontal rule `---` | Removed |
+   | Obsidian callout `[!tip]` | Label → `【label】` on its own line |
 
-4. 在 Ghostty pane 里展示最近 10 条清洗结果，按数字键 `0-9` 复制
+5. **History panel** — keeps the last 10 cleaned items. Press `0`–`9` to copy.
 
-> 这是 Claude Code 已知 bug 的 workaround：[anthropics/claude-code#15199](https://github.com/anthropics/claude-code/issues/15199)
+Full rules in [`docs/CLEANING_RULES.md`](docs/CLEANING_RULES.md).
 
-## 演示
+## Demo
 
-**输入**（从 Claude Code 复制）：
-
-```
-  ## 步骤
-
-  请使用 `git commit` 提交，并 **不要** 跳过 hooks。
-  详见 [文档](https://git-scm.com)。
-```
-
-**输出**（粘到微信里）：
+**Input** (copied from Claude Code):
 
 ```
-【步骤】
+  ## Steps
 
-请使用 「git commit」 提交，并 【不要】 跳过 hooks。
-详见 文档 (https://git-scm.com)。
+  Use `git commit` to commit, and **don't** skip the hooks.
+  See the [docs](https://git-scm.com).
 ```
 
-## 安装
+**Output** (paste-ready for any IM or note-taking app):
+
+```
+【Steps】
+
+Use 「git commit」 to commit, and 【don't】 skip the hooks.
+See the docs (https://git-scm.com).
+```
+
+## Install
 
 ```bash
 git clone https://github.com/manwithshit/clipboard-cleaner.git
@@ -58,98 +80,84 @@ cd clipboard-cleaner
 pip3 install pyperclip wcwidth
 ```
 
-依赖：
+Requirements:
 
 - Python 3.9+
-- macOS（依赖 `pbpaste`，跨平台未测试）
-- 推荐在 [Ghostty](https://ghostty.org/) 终端的 split pane 中运行
+- macOS (uses `pbpaste`; cross-platform untested)
+- Best in a [Ghostty](https://ghostty.org/) split pane next to your Claude Code session
 
-## 使用
+## Usage
 
-### TUI 模式（推荐）
+### TUI mode (recommended)
 
 ```bash
 python3 run.py
 ```
 
-界面：
-
-```
-┌──────────────────────────────┐
-│  Clipboard Cleaner           │
-├──────────────────────────────┤
-│ [0] 最新清洗结果...           │
-│ [1] 上一条...                │
-│ ...                          │
-│ [9] 最旧的...                │
-├──────────────────────────────┤
-│ 监听中... 3/10               │
-│ 0-9:复制 ↑↓:滚动 C:清空 q:退出│
-└──────────────────────────────┘
-```
-
-| 按键 | 行为 |
+| Key | Action |
 |---|---|
-| `0` ~ `9` | 复制对应条目到系统剪贴板 |
-| `↑` / `k` | 向上滚动 |
-| `↓` / `j` | 向下滚动 |
-| `PageUp` / `PageDown` | 按页滚动 |
-| `Home` / `End` | 跳到顶部 / 底部 |
-| `C` | 清空面板 |
-| `q` | 退出 |
+| `0` – `9` | Copy that history item back to the clipboard |
+| `↑` / `k` | Scroll up |
+| `↓` / `j` | Scroll down |
+| `PageUp` / `PageDown` | Page scroll |
+| `Home` / `End` | Top / bottom |
+| `C` | Clear panel |
+| `q` | Quit |
 
-### 纯文本模式（pipe 测试）
+### Plain mode (pipe testing)
 
 ```bash
-echo '  缩进的 **加粗** 文本' | python3 run.py --plain
+echo '  indented **bold** text' | python3 run.py --plain
 ```
 
-### 推荐别名
+### Recommended alias
 
-在 `~/.zshrc` 加：
+In your `~/.zshrc`:
 
 ```bash
 alias clip='cd /path/to/clipboard-cleaner && python3 run.py'
 ```
 
-## 设计原则
+## Design principles
 
-**保守清洗，少误伤。** 默认不破坏列表、代码块、表格的内部结构，只修复确定性强的问题。
+- **Conservative cleaning, no collateral damage.** The default never breaks code blocks, lists, or tables — only fixes high-confidence noise.
+- **IM-visual-equivalence.** When mapping Markdown markers, the goal is "still visually emphasized in plain-text contexts," not lossless conversion. So `**bold**` → `【bold】` is fine; it doesn't round-trip.
+- **Ghost-capture filter.** Text with no terminal formatting fingerprints (voice input, normal app copies) is silently skipped — better miss than spam.
 
-**IM 视觉等价。** 转换 Markdown 标记时，目标是"在不渲染 Markdown 的环境里读起来仍然有视觉强调"，而不是"语义无损的转换"。所以 `**bold**` → `【bold】` 是合理的，反过来不一定。
-
-**幽灵捕获过滤。** 没有任何 Claude Code / 终端格式痕迹的文本（语音输入、其他应用复制的干净文本）会被跳过，不进面板。
-
-## 架构
+## Architecture
 
 ```
 ┌──────────────────┐    ┌─────────────────┐    ┌─────────────┐
-│ pyperclip 轮询    │──▶│ has_format_     │──▶│ clean()     │
-│ (0.2s)           │    │ artifacts() 过滤 │    │ 7 步管线    │
+│ pyperclip poll   │──▶│ has_format_     │──▶│ clean()     │
+│ (0.2s)           │    │ artifacts() gate │    │ 7-step pipe │
 └──────────────────┘    └─────────────────┘    └──────┬──────┘
                                                      │ queue
                                                      ▼
                        ┌─────────────────┐    ┌─────────────┐
                        │ AppState        │◀──│ curses TUI   │
-                       │ 历史 10 条       │    │ 数字键复制    │
+                       │ history 10 max  │    │ digit-copy   │
                        └─────────────────┘    └─────────────┘
 ```
 
-详见 [docs/TECHNICAL_DESIGN.md](docs/TECHNICAL_DESIGN.md)。
+See [`docs/TECHNICAL_DESIGN.md`](docs/TECHNICAL_DESIGN.md) for details.
 
-## 测试
+## Tests
 
 ```bash
 python3 -m pytest tests/ -v
 ```
 
-包含 88 个单元测试 + 6 组 golden fixture，覆盖所有清洗规则的常见和边界场景。
+109 unit tests + 6 golden fixtures covering every cleaning rule with common and edge cases.
 
-## 已知限制
+## Known limitations
 
-1. 0.2s 轮询间隔内连续复制 A 再复制 B，只能看到 B
-2. 没有任何格式痕迹的极短 Claude 输出会被 `has_format_artifacts` 跳过（设计取舍：宁愿漏，不要误捕获语音输入）
-3. macOS only — Windows / Linux 未测试
+1. With a 0.2s poll interval, very rapid copy-A-then-copy-B sequences may miss A.
+2. Extremely short Claude outputs with no formatting fingerprints get filtered out by design (preferring "miss" over "false-positive on voice input").
+3. macOS-only — Windows / Linux untested.
+
+## Related work
+
+- [`claude-fix`](https://github.com/freyjay/claude-code-command-fix) — one-shot CLI text cleaner. Different shape (manual invocation), same root cause.
 
 ## License
 
