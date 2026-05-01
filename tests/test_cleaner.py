@@ -99,10 +99,9 @@ def test_code_fence_preserves_inline_markers_inside():
 
 def test_remove_quote_bar():
     result = clean('| 这是一段引用样式文本\n| 第二行继续')
-    # 竖线去掉后，两行被合并（硬换行合并）
+    # 竖线去掉，加引用层级标记 〔引〕，两行硬换行合并
     assert '|' not in result
-    # CJK 和 CJK 之间不加空格（cleaner 行为）
-    assert result == '这是一段引用样式文本第二行继续'
+    assert result == '〔引〕这是一段引用样式文本第二行继续'
 
 
 def test_remove_chinese_quote_bar():
@@ -292,11 +291,11 @@ def test_decorated_code_block_strips_decor_and_fence():
     assert result == 'def f():\n    return 1'
 
 
-def test_nested_quote_lines_merged_into_one_wrap():
-    """嵌套引用：连续同层级的行先合并，整段包一对 『 』。"""
+def test_nested_quote_lines_merged_into_one_marker():
+    """嵌套引用：连续同层级的行先合并，整段加一次 〔引²〕 标记。"""
     raw = '> > 第一行，\n> > 第二行。'
     result = clean(raw)
-    assert result == '『第一行，第二行。』'
+    assert result == '〔引²〕第一行，第二行。'
 
 
 def test_dedup_same_raw_hash():
@@ -659,32 +658,38 @@ def test_frontmatter_unclosed_kept():
 # UX B: 嵌套引用合并跨行
 # ============================================================
 
-def test_nested_quote_two_lines_merged():
+def test_nested_quote_two_levels_marker():
     raw = '> > 第一行，\n> > 第二行。'
     result = clean(raw)
-    assert result == '『第一行，第二行。』'
+    assert result == '〔引²〕第一行，第二行。'
 
 
-def test_nested_quote_three_levels():
+def test_nested_quote_three_levels_marker():
     raw = '> > > 三层第一行，\n> > > 三层第二行。'
     result = clean(raw)
-    assert result == '『『三层第一行，三层第二行。』』'
+    assert result == '〔引³〕三层第一行，三层第二行。'
+
+
+def test_nested_quote_four_levels_marker():
+    """4 层及以上同样能用上标数字表达。"""
+    raw = '> > > > 第一，\n> > > > 第二。'
+    result = clean(raw)
+    assert result == '〔引⁴〕第一，第二。'
 
 
 def test_nested_quote_with_terminator_keeps_break():
-    """嵌套引用内有强终止标点的换行仍保留（合并规则一致）。"""
+    """嵌套引用内有强终止标点的换行仍保留（合并规则一致），每行各自带标记。"""
     raw = '> > 第一句。\n> > 第二句。'
     result = clean(raw)
-    # 各自包，但每行独立（因为 。 是强终止）
-    assert '『第一句。』' in result
-    assert '『第二句。』' in result
+    assert '〔引²〕第一句。' in result
+    assert '〔引²〕第二句。' in result
 
 
-def test_single_quote_still_works():
-    """单层引用仍然合并跨行（旧行为）。"""
+def test_single_quote_with_marker():
+    """单层引用现在也加 〔引〕 标记，跨行仍合并。"""
     raw = '> 第一行，\n> 第二行。'
     result = clean(raw)
-    assert result == '第一行，第二行。'
+    assert result == '〔引〕第一行，第二行。'
 
 
 # ============================================================

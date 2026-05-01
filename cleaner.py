@@ -148,6 +148,21 @@ _NESTED_QUOTE = re.compile(r'^(\s*)((?:[│｜|>▎]\s*)+)')
 # 单个装饰字符（用于计算嵌套层级）
 _SINGLE_DECOR = re.compile(r'[│｜|>▎]\s*')
 
+# 引用层级标记：1 层 → 〔引〕，2 层 → 〔引²〕，3 层 → 〔引³〕...
+# 用上标数字而非串接『 』，避免深层嵌套时一堆括号视觉混乱
+_SUPERSCRIPT_TRANS = str.maketrans('0123456789', '⁰¹²³⁴⁵⁶⁷⁸⁹')
+_INVERSE_SUPERSCRIPT_TRANS = str.maketrans('⁰¹²³⁴⁵⁶⁷⁸⁹', '0123456789')
+_QUOTE_MARKER_RE = re.compile(r'^〔引([⁰¹²³⁴⁵⁶⁷⁸⁹]*)〕')
+
+
+def _format_quote_marker(level: int) -> str:
+    """生成 〔引〕/〔引²〕/〔引³〕... 标记。"""
+    if level <= 0:
+        return ''
+    if level == 1:
+        return '〔引〕'
+    return f'〔引{str(level).translate(_SUPERSCRIPT_TRANS)}〕'
+
 # Obsidian callout / admonition 标记：[!tip]、[!note]、[!warning] 等
 # 终端中无法渲染，清洗时把整行转成 `## 标签`（再由 heading 处理转 【标签】）
 _OBSIDIAN_CALLOUT = re.compile(r'^\[![a-zA-Z]+\]\s*')
@@ -218,11 +233,14 @@ _CODE_DECOR = re.compile(r'^(\s*)((?:[│｜|>▎] ?)+)(.*)$')
 def _strip_decorations(line: str) -> tuple[str, int]:
     """去除行首装饰竖线/大于号，返回 (处理后的行, 嵌套层级)。
 
-    嵌套规则：
-      > 文本        → level 1, "文本"
-      > > 文本      → level 2, "『文本』"
-      > > > 文本    → level 3, "『『文本』』"
-      | | 文本      → 同理
+    嵌套规则（统一标记 〔引ⁿ〕）：
+      > 文本        → level 1, "〔引〕文本"
+      > > 文本      → level 2, "〔引²〕文本"
+      > > > 文本    → level 3, "〔引³〕文本"
+      | 文本        → 同理（其他装饰字符走相同路径）
+
+    例外：装饰后的内容是 Markdown 结构（代码围栏/标题/列表/表格）时，
+    不加标记，让分类器正常识别那些结构。
     """
     stripped = line.strip()
 
@@ -245,16 +263,27 @@ def _strip_decorations(line: str) -> tuple[str, int]:
         level = len(_SINGLE_DECOR.findall(decor))
         rest = rest_after_decor
 
-        # Obsidian callout：[!tip] 标签 → ## 标签（独立成行）
+        # Obsidian callout：[!tip] 标签 → ## 标签（独立成行，丢弃引用层级）
         if _OBSIDIAN_CALLOUT.match(rest.lstrip()):
             rest = _process_callout(rest.lstrip())
             return indent + rest, level
 
-        if level > 1:
-            quotes = '『' * (level - 1)
-            rest = quotes + rest + '』' * (level - 1)
+        # 结构性内容（围栏/标题/列表/表格）不加 〔引〕 标记，
+        # 让 _classify_line 正常识别这些结构
+        rest_lstripped = rest.lstrip()
+        is_structural = bool(
+            _FENCE.match(rest_lstripped)
+            or _HEADING.match(rest_lstripped)
+            or _UNORDERED_LIST.match(rest_lstripped)
+            or _ORDERED_LIST.match(rest_lstripped)
+            or rest_lstripped.startswith('|')
+        )
+        if is_structural:
+            return indent + rest, level
 
-        return indent + rest, level
+        # 普通引用文本：加 〔引ⁿ〕 标记
+        marker = _format_quote_marker(level)
+        return indent + marker + rest, level
 
     # 表格行：两端有 | 且中间有 | 分隔符
     if stripped.startswith('|') and stripped.endswith('|') and len(stripped) > 2:
@@ -396,19 +425,26 @@ def _merge_hard_wraps(lines: list[str]) -> list[str]:
 
 
 def _unwrap_nested_quote(line: str) -> tuple[str, int]:
-    """把 `『『text』』` 拆成 (text, level)，没有包裹则 level=0。"""
+    """识别 `〔引〕` / `〔引²〕` / `〔引³〕` 等标记，返回 (剥标记后的文本, level)。
+
+    没有标记则返回 (text, 0)。
+    """
     stripped = line.strip()
-    level = 0
-    while stripped.startswith('『') and stripped.endswith('』'):
-        stripped = stripped[1:-1]
-        level += 1
-    return stripped, level
+    match = _QUOTE_MARKER_RE.match(stripped)
+    if not match:
+        return stripped, 0
+    sup = match.group(1)
+    if not sup:
+        level = 1
+    else:
+        level = int(sup.translate(_INVERSE_SUPERSCRIPT_TRANS))
+    return stripped[match.end():], level
 
 
 def _merge_nested_quote_group(lines: list[str]) -> list[str]:
-    """合并嵌套引用组：同层级的连续行先合并，整段重包 `『 』`。
+    """合并引用组：同层级的连续行先按硬换行规则合并，整段重加一次 〔引ⁿ〕。
 
-    单层引用行（level=0，已被 strip_decorations 还原）保持不变。
+    无标记的行（level=0）保持不变。
     """
     pairs = [_unwrap_nested_quote(l) for l in lines if l.strip()]
     if not pairs:
@@ -430,11 +466,9 @@ def _merge_nested_quote_group(lines: list[str]) -> list[str]:
             j += 1
         # 用硬换行规则合并
         merged = _merge_hard_wraps(chunk)
-        # 整体重包同层 `『 』`
-        wrapper_open = '『' * level
-        wrapper_close = '』' * level
+        marker = _format_quote_marker(level)
         for m in merged:
-            result.append(wrapper_open + m + wrapper_close)
+            result.append(marker + m)
         i = j
     return result
 
@@ -678,7 +712,7 @@ def clean(raw_text: str) -> str:
 
             line_type = _classify_line(line, in_code_block)
 
-            if quote_level > 1 and line_type == 'normal':
+            if quote_level >= 1 and line_type == 'normal':
                 line_type = 'quote'
 
         # 处理 fenced code block 边界
