@@ -1,6 +1,6 @@
 # Clipboard Cleaner — 技术方案文档
 
-> 版本: v2 (2026-04-30)  
+> 版本: v3 (2026-04-30)  
 > 代码位置: `~/重要但不同步icloud/02_项目/github项目/clipboard-cleaner/`
 
 ---
@@ -14,6 +14,7 @@
 - 复制 Claude Code 输出时，换行符和缩进空格都会被一起带走
 - 粘贴到微信/聊天框中时，文本格式支离破碎
 - 此外还有引用竖线（`>`、`▎`、`|`）、ASCII 边框、尾空格等格式噪音
+- Obsidian callout 标记（`[!tip]`、`[!note]` 等）在终端中不可见
 
 这是 Claude Code 的已知 bug：[anthropics/claude-code#15199](https://github.com/anthropics/claude-code/issues/15199)
 
@@ -21,7 +22,7 @@
 
 ## 2. 设计目标
 
-做一个 Python 小工具，后台监听系统剪贴板，自动捕获并清洗内容后展示在一个 Ghostty pane 中。用户通过数字键快速复制清洗后的干净文本。
+做一个 Python 小工具，后台监听系统剪贴板，自动捕获 Ghostty 中复制、鼠标选中、Command+A 全选带来的剪贴板变化，清洗内容后展示在一个 Ghostty pane 中。用户通过数字键快速复制清洗后的干净文本。
 
 **核心原则：保守清洗，少误伤。** 默认不去破坏列表、代码块、表格和段落结构。只修复确定性强的问题。
 
@@ -33,7 +34,7 @@
 ┌─────────────────────┐     ┌──────────────────┐     ┌─────────────┐
 │  系统剪贴板          │────>│ clipboard.py     │────>│ cleaner.py  │
 │  pyperclip.paste()  │     │ 轮询 0.2s        │     │ 清洗管线     │
-└─────────────────────┘     │ + 幽灵过滤         │     │ 7 步        │
+└─────────────────────┘     │ + 格式特征捕获      │     │ 7 步        │
                             │ + 反馈抑制         │     └──────┬──────┘
                             └──────┬─────────────┘            │
                                    │ queue.Queue              │
@@ -41,7 +42,7 @@
                             ┌──────────────────┐     ┌─────────────┐
                             │ tui.py           │<────│ model.py    │
                             │ curses 渲染       │     │ AppState    │
-                            │ 按键处理          │     │ 历史 10 条   │
+                            │ 按键+滚动处理      │     │ 历史 10 条   │
                             └──────────────────┘     └─────────────┘
 ```
 
@@ -130,11 +131,11 @@ else:
 
 ## 5. 关键特性实现
 
-### 5.1 幽灵捕获过滤
+### 5.1 Ghostty 选择捕获 + 格式特征过滤
 
-**问题**：语音输入确认时、Cmd+A 全选时，剪贴板内容会变化但用户并未执行 Cmd+C。
+**能力**：Ghostty 中用鼠标选中、Command+A 全选或复制 Claude Code 输出时，系统剪贴板会变化。工具会自动捕获这类终端选择内容，把它作为待清洗候选加入面板。
 
-**方案**：检测内容是否包含 Claude Code 格式痕迹，没有则跳过。
+**边界**：为了避免语音输入、普通应用复制的干净文本频繁进入面板，仍会检测内容是否包含 Claude Code / 终端格式痕迹；没有痕迹的普通短文本会跳过。
 
 ```python
 def has_format_artifacts(text: str) -> bool:
@@ -148,9 +149,10 @@ def has_format_artifacts(text: str) -> bool:
 ```
 
 效果：
-- ✅ 语音输入「你好，这是语音输入的内容」→ `False`，跳过
-- ✅ Cmd+A 选中「这是一段干净的文本」→ `False`，跳过
+- ✅ Ghostty 鼠标选中/Command+A 选中带硬换行或 2 空格续行的内容 → `True`，捕获
 - ✅ Claude Code 输出「  这是缩进文本」→ `True`，捕获
+- ✅ 语音输入「你好，这是语音输入的内容」→ `False`，跳过
+- ✅ 其他应用复制的干净短文本 → `False`，跳过
 
 ### 5.2 反馈回路抑制
 
@@ -158,11 +160,11 @@ def has_format_artifacts(text: str) -> bool:
 
 ```python
 # TUI 线程执行复制时：
+state.mark_program_copy(item.cleaned)  # 记录程序写入内容的 hash
 pyperclip.copy(item.cleaned)
-state.mark_program_copy()  # 记录时间戳
 
 # 后台线程轮询时：
-if state.is_program_copy():  # 1.5 秒内跳过
+if state.is_program_copy(current):  # 1.5 秒内且内容 hash 匹配时跳过
     continue
 ```
 
@@ -177,7 +179,7 @@ if item.cleaned_hash in self._recent_cleaned_hashes:
     return False  # 清洗后相同（不同原始内容但清洗结果一样）
 ```
 
-维护最近 50 条 hash，超出时保留最新一半。
+维护最近 50 条 hash，使用 `deque + set` 按插入顺序淘汰旧 hash，超出时保留最新一半。
 
 ### 5.4 列表项跨行延续
 
@@ -203,7 +205,7 @@ if (group_type == 'normal'
 | `code` | 去掉外层公共缩进，内部结构不动 |
 | `list` | 去掉 ≥2 公共缩进，合并延续行 |
 | `heading` | 去掉公共缩进 |
-| `table` | 不动 |
+| `table` | Markdown pipe 表格转数字条目；解析失败则原样保留 |
 | `blank` | 最多保留 1 个空行 |
 | `normal` | 去公共缩进 + 硬换行合并 |
 
@@ -228,13 +230,14 @@ def _cell_width(text: str) -> int:
 clipboard-cleaner/
 ├── run.py           # 入口：python run.py (TUI) / python run.py --plain
 ├── model.py         # ClipboardItem + AppState（线程安全）
-├── clipboard.py     # 剪贴板轮询 + 幽灵过滤 + 反馈抑制 + 去重
+├── clipboard.py     # 剪贴板轮询 + 格式特征过滤 + 反馈抑制 + 去重
 ├── cleaner.py       # 清洗管线 + has_format_artifacts
 ├── tui.py           # curses TUI + CJK 宽度 + resize 自适应
 ├── .gitignore
 └── tests/
-    ├── test_cleaner.py          # 34 个清洗单元测试
-    ├── test_model.py            # 10 个模型/状态测试
+    ├── test_cleaner.py          # 清洗单元测试
+    ├── test_model.py            # 模型/状态测试
+    ├── test_tui.py              # TUI 渲染辅助测试
     ├── test_golden_fixtures.py  # 6 组 golden fixture
     └── fixtures/                # 12 个 input/expected 对
 ```
@@ -279,11 +282,17 @@ clipboard-cleaner/
 | 按键 | 行为 |
 |------|------|
 | `0`~`9` | 复制对应条目到系统剪贴板 |
+| `↑` / `k` | 向上滚动历史内容 |
+| `↓` / `j` | 向下滚动历史内容 |
+| `PageUp` / `PageDown` | 按页滚动 |
+| `Home` / `End` | 回到顶部 / 跳到底部 |
 | `C` | 清空面板 |
 | `q` | 退出（curses.wrapper 保证恢复终端） |
 
 - 最新内容在 `[0]`，旧的依次往下
 - 满 10 条时挤掉最旧的一条
+- 历史内容按行滚动，长内容或 10 条历史超过屏幕高度时仍可查看
+- 新内容进入时自动回到顶部显示最新条目
 - 窗口 resize 自动重绘
 
 ---
@@ -312,6 +321,16 @@ clipboard-cleaner/
 | 幽灵捕获 | 新增 `has_format_artifacts()` 过滤语音输入/Cmd+A |
 | CJK-英文合并 | 智能加空格（CJK+CJK 不加） |
 | Python 3.9 兼容 | `from __future__ import annotations` |
+
+### v2 → v3（2026-04-30）
+
+| 优化项 | 变更 |
+|--------|------|
+| Ghostty 选择捕获 | 将鼠标选中/Command+A 全选终端内容视为正式捕获能力 |
+| TUI 滚动 | 新增按行/按页滚动，长历史不再被屏幕高度截断 |
+| 表格处理 | Markdown pipe 表格转数字条目列表，保留含义、不保留表格结构 |
+| 续行缩进 | 支持首行无缩进、后续 2 空格缩进的 Claude/Ghostty 硬换行样式 |
+| Obsidian callout | 去除 `[!tip]`、`[!note]` 等终端不可见的 callout 标记 |
 
 ---
 

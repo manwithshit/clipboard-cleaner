@@ -103,6 +103,18 @@ def test_clear():
     assert len(state) == 0
 
 
+def test_snapshot_returns_newest_first_copy():
+    state = AppState()
+    state.add_item(_make_item('first'))
+    state.add_item(_make_item('second'))
+
+    snapshot = state.snapshot()
+
+    assert [item.raw for item in snapshot] == ['second', 'first']
+    snapshot.clear()
+    assert len(state) == 2
+
+
 def test_get_item_by_index():
     state = AppState()
     state.add_item(_make_item('first'))
@@ -119,3 +131,27 @@ def test_hash_text():
     h3 = _hash_text('world')
     assert h1 == h2
     assert h1 != h3
+
+
+def test_duplicate_rejected_after_hash_history_prune():
+    """hash 历史超过上限后仍应按插入顺序保留最近记录。"""
+    state = AppState()
+    state._MAX_HASH_HISTORY = 6
+    for i in range(8):
+        assert state.add_item(_make_item(f'content {i}')) is True
+
+    # 最新一半应仍在去重窗口内
+    assert state.add_item(_make_item('content 5')) is False
+    assert state.add_item(_make_item('content 6')) is False
+    assert state.add_item(_make_item('content 7')) is False
+
+    # 很早的条目可被去重窗口淘汰
+    assert state.add_item(_make_item('content 0')) is True
+
+
+def test_program_copy_can_suppress_exact_content():
+    state = AppState()
+    state.mark_program_copy('copied text')
+
+    assert state.is_program_copy('copied text') is True
+    assert state.is_program_copy('other text') is False

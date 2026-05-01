@@ -24,6 +24,21 @@ def test_remove_common_indent():
     assert result == '这是一段被 Claude Code 复制出来的文本'
 
 
+def test_detect_claude_continuation_indent_artifact():
+    """首行无缩进、后续硬换行带 2 空格缩进也应视为 Claude 痕迹。"""
+    from cleaner import has_format_artifacts
+
+    raw = 'Codex 改得不错。5\n  个发现都是真实问题\n  ，修复方案合理'
+    assert has_format_artifacts(raw) is True
+
+
+def test_remove_claude_continuation_indent():
+    """清洗首行无缩进、后续行带 2 空格的硬换行。"""
+    raw = 'Codex 改得不错。5\n  个发现都是真实问题\n  ，修复方案合理'
+    result = clean(raw)
+    assert result == 'Codex 改得不错。5个发现都是真实问题，修复方案合理'
+
+
 # === TC-CLEAN-003：保留 Markdown 无序列表 ===
 
 def test_preserve_unordered_list():
@@ -183,11 +198,29 @@ def test_mixed_content():
     assert '这是结尾。' in result
 
 
-def test_table_preserved():
-    """表格不应被破坏。"""
+def test_table_converted_to_narrative_items():
+    """Markdown 表格应降维成适合聊天粘贴的语义条目。"""
     raw = '| 列 A | 列 B |\n|------|------|\n| 值 1 | 值 2 |'
     result = clean(raw)
-    assert '| 列 A | 列 B |' in result
+    assert result == '1. 列 A：值 1\n   列 B：值 2'
+
+
+def test_table_with_uneven_cells_converted_to_narrative_items():
+    """列数不齐时，多余单元格合并到最后一列，空单元格跳过。"""
+    raw = (
+        '| 功能 | 状态 | 说明 |\n'
+        '|---|---|---|\n'
+        '| 清洗 | 完成 | 支持硬换行 | 额外备注 |\n'
+        '| 监听 |  | 支持反馈抑制 |'
+    )
+    result = clean(raw)
+    assert result == (
+        '1. 功能：清洗\n'
+        '   状态：完成\n'
+        '   说明：支持硬换行 额外备注\n\n'
+        '2. 功能：监听\n'
+        '   说明：支持反馈抑制'
+    )
 
 
 def test_list_item_continuation():
@@ -246,6 +279,20 @@ y = 2
     assert 'y = 2' in result
 
 
+def test_decorated_code_block_not_merged():
+    """带引用装饰的代码块仍应按代码块处理。"""
+    raw = '| ```python\n| def f():\n|     return 1\n| ```'
+    result = clean(raw)
+    assert result == '```python\ndef f():\n    return 1\n```'
+
+
+def test_nested_quote_lines_preserve_breaks():
+    """嵌套引用的每一行不应被普通段落合并揉平。"""
+    raw = '> > 第一行\n> > 第二行'
+    result = clean(raw)
+    assert result == '『第一行』\n『第二行』'
+
+
 def test_dedup_same_raw_hash():
     """测试：相同原始内容清洗后应该一致。"""
     r1 = clean('  hello  \n  world  ')
@@ -293,3 +340,27 @@ def test_long_wrapped_chinese_with_breaks():
         "多行显示，但我们希望复制的时候能够恢复成完整的一段文字。"
     )
     assert result == expected
+
+
+def test_obsidian_callout_stripped():
+    """Obsidian callout 标记 [!tip] 应被去除。"""
+    raw = '[!tip] 这是一个提示'
+    result = clean(raw)
+    assert '[!tip]' not in result
+    assert result == '这是一个提示'
+
+
+def test_obsidian_callout_with_quote_decor():
+    """带引用装饰的 callout 行应同时去掉装饰和标记。"""
+    raw = '▎ [!tip] 提示\n▎ 内容'
+    result = clean(raw)
+    assert '[!tip]' not in result
+    assert '提示' in result
+    assert '内容' in result
+
+
+def test_obsidian_various_callouts():
+    """多种 callout 类型都应被去除。"""
+    raw = '[!warning] 警告\n[!note] 笔记\n[!important] 重要'
+    result = clean(raw)
+    assert '[!' not in result

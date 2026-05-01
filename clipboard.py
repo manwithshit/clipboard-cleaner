@@ -9,7 +9,7 @@ from __future__ import annotations
 import time
 import hashlib
 import threading
-from queue import Queue, Empty
+from queue import Queue
 
 import pyperclip
 
@@ -70,7 +70,7 @@ class ClipboardMonitor:
             self._last_content = current
 
             # 反馈回路抑制：程序刚写入的剪贴板，跳过
-            if self.state.is_program_copy():
+            if self.state.is_program_copy(current):
                 continue
 
             # 幽灵捕获过滤：没有 Claude Code 格式痕迹的内容不加入列表

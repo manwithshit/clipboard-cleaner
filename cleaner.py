@@ -49,7 +49,7 @@ _MULTI_BLANK = re.compile(r'\n{3,}')
 # 单个字符的行（可能是截断产物，但不合并）
 _SINGLE_CHAR_LINE = re.compile(r'^.{0,2}$')
 
-BlockType = Literal['code', 'list', 'heading', 'table', 'blank', 'normal']
+BlockType = Literal['code', 'list', 'heading', 'table', 'quote', 'blank', 'normal']
 
 
 def _classify_line(line: str, in_code_block: bool) -> BlockType:
@@ -87,6 +87,12 @@ _NESTED_QUOTE = re.compile(r'^(\s*)((?:[│｜|>▎]\s*)+)')
 # 单个装饰字符（用于计算嵌套层级）
 _SINGLE_DECOR = re.compile(r'[│｜|>▎]\s*')
 
+# Obsidian callout / admonition 标记：[!tip]、[!note]、[!warning] 等
+# 终端中无法渲染，清洗时应去掉
+_OBSIDIAN_CALLOUT = re.compile(r'^\[![a-zA-Z]+\]\s*')
+
+_CODE_DECOR = re.compile(r'^(\s*)((?:[│｜|>▎] ?)+)(.*)$')
+
 
 def _strip_decorations(line: str) -> tuple[str, int]:
     """去除行首装饰竖线/大于号，返回 (处理后的行, 嵌套层级)。
@@ -118,6 +124,9 @@ def _strip_decorations(line: str) -> tuple[str, int]:
         level = len(_SINGLE_DECOR.findall(decor))
         rest = rest_after_decor
 
+        # 去掉 Obsidian callout 标记（终端不可见）
+        rest = _OBSIDIAN_CALLOUT.sub('', rest)
+
         if level > 1:
             quotes = '『' * (level - 1)
             rest = quotes + rest + '』' * (level - 1)
@@ -130,7 +139,22 @@ def _strip_decorations(line: str) -> tuple[str, int]:
     if stripped.count('|') >= 2:
         return line, 0
 
+    # 去掉 Obsidian callout 标记（无引用装饰的裸 callout）
+    if _OBSIDIAN_CALLOUT.match(stripped):
+        return _OBSIDIAN_CALLOUT.sub('', stripped), 0
+
     return line, 0
+
+
+def _strip_code_decorations(line: str) -> tuple[str, int]:
+    """去除代码块外层装饰，但保留代码自身缩进。"""
+    match = _CODE_DECOR.match(line)
+    if not match:
+        return line, 0
+
+    indent, decor, rest = match.groups()
+    level = len(re.findall(r'[│｜|>▎]', decor))
+    return indent + rest, level
 
 
 def _is_border_line(line: str) -> bool:
@@ -199,6 +223,14 @@ def _should_keep_break(prev_line: str, next_line: str) -> bool:
     return False
 
 
+def _is_cjk_or_punctuation(char: str) -> bool:
+    """判断字符是否适合按 CJK 文本直接拼接。"""
+    return (
+        '一' <= char <= '鿿'
+        or char in '，。！？；：、）】』」》〉’”'
+    )
+
+
 def _merge_hard_wraps(lines: list[str]) -> list[str]:
     """在普通段落块内保守合并硬换行。
 
@@ -219,9 +251,9 @@ def _merge_hard_wraps(lines: list[str]) -> list[str]:
         else:
             # 合并：如果当前行以 CJK 结尾且下一行以 CJK 开头，不加空格
             if current and next_line:
-                last_cjk = '一' <= current[-1] <= '鿿'
-                first_cjk = '一' <= next_line[0] <= '鿿'
-                if last_cjk and first_cjk:
+                first_cjk = _is_cjk_or_punctuation(next_line[0])
+                last_ascii_alpha = current[-1].isascii() and current[-1].isalpha()
+                if first_cjk and not last_ascii_alpha:
                     current = current + next_line
                 elif current[-1] != ' ' and next_line[0] != ' ':
                     current = current + ' ' + next_line
@@ -258,6 +290,100 @@ def _remove_common_indent(lines: list[str], indent: int) -> list[str]:
     return result
 
 
+def _remove_continuation_indent(lines: list[str]) -> list[str]:
+    """去掉首行无缩进、后续硬换行行带 2 空格的终端缩进。"""
+    if len(lines) < 2:
+        return lines
+
+    first_indent = len(lines[0]) - len(lines[0].lstrip(' '))
+    if first_indent != 0:
+        return lines
+
+    continuation_lines = [line for line in lines[1:] if line.strip()]
+    if not continuation_lines:
+        return lines
+
+    continuation_indents = [
+        len(line) - len(line.lstrip(' ')) for line in continuation_lines
+    ]
+    if min(continuation_indents) < 2:
+        return lines
+
+    return [lines[0]] + [
+        line[2:] if line.startswith('  ') else line for line in lines[1:]
+    ]
+
+
+def _split_markdown_table_row(line: str) -> list[str] | None:
+    """拆分 Markdown pipe 表格行。"""
+    stripped = line.strip()
+    if not stripped.startswith('|') or not stripped.endswith('|'):
+        return None
+
+    return [cell.strip() for cell in stripped.strip('|').split('|')]
+
+
+def _is_markdown_table_separator(cells: list[str]) -> bool:
+    """判断是否为 Markdown 表格分隔行。"""
+    if not cells:
+        return False
+    for cell in cells:
+        compact = cell.replace(' ', '')
+        if not re.fullmatch(r':?-{3,}:?', compact):
+            return False
+    return True
+
+
+def _normalize_table_cell(cell: str) -> str:
+    """规范化表格单元格内容，保持语义优先。"""
+    return re.sub(r'\s+', ' ', cell.replace('<br>', '；').replace('<br/>', '；')).strip()
+
+
+def _table_to_narrative(lines: list[str]) -> list[str] | None:
+    """把规整 Markdown 表格转成数字条目列表。"""
+    rows = [_split_markdown_table_row(line) for line in lines if line.strip()]
+    if any(row is None for row in rows) or len(rows) < 3:
+        return None
+
+    parsed_rows = [row for row in rows if row is not None]
+    headers = [_normalize_table_cell(cell) for cell in parsed_rows[0]]
+    if not _is_markdown_table_separator(parsed_rows[1]):
+        return None
+
+    headers = [
+        header if header else f'列{i + 1}' for i, header in enumerate(headers)
+    ]
+    if not headers:
+        return None
+
+    result: list[str] = []
+    item_index = 1
+    for row in parsed_rows[2:]:
+        cells = [_normalize_table_cell(cell) for cell in row]
+        if len(cells) > len(headers):
+            cells = cells[:len(headers) - 1] + [' '.join(cells[len(headers) - 1:])]
+        elif len(cells) < len(headers):
+            cells = cells + [''] * (len(headers) - len(cells))
+
+        fields = [
+            (header, cell)
+            for header, cell in zip(headers, cells)
+            if cell
+        ]
+        if not fields:
+            continue
+
+        if result:
+            result.append('')
+        first_header, first_cell = fields[0]
+        result.append(f'{item_index}. {first_header}：{first_cell}')
+        for header, cell in fields[1:]:
+            result.append(f'   {header}：{cell}')
+        item_index += 1
+
+    return result if result else None
+
+
 def clean(raw_text: str) -> str:
     """保守清洗管线主入口。
 
@@ -280,6 +406,7 @@ def clean(raw_text: str) -> str:
     # Step 3: 识别并处理各行
     in_code_block = False
     code_fence_char = None
+    code_block_decorated = False
 
     # 分组：连续的同类型行归为一组
     groups: list[tuple[BlockType, list[str]]] = []
@@ -287,7 +414,24 @@ def clean(raw_text: str) -> str:
     current_group_lines: list[str] = []
 
     for line in lines:
+        quote_level = 0
+
+        # 先去掉终端/Claude 引用装饰，再分类。若代码块是从带装饰的
+        # 区域打开的，代码块内部也继续剥掉同类装饰。
+        if in_code_block:
+            if code_block_decorated:
+                line, quote_level = _strip_code_decorations(line)
+        else:
+            line, quote_level = _strip_decorations(line)
+
+            # 去掉边框整行
+            if _is_border_line(line):
+                line = ''
+
         line_type = _classify_line(line, in_code_block)
+
+        if quote_level > 1 and line_type == 'normal':
+            line_type = 'quote'
 
         # 处理 fenced code block 边界
         if line_type == 'code' and _FENCE.match(line.strip()):
@@ -297,17 +441,11 @@ def clean(raw_text: str) -> str:
                 if not in_code_block:
                     in_code_block = True
                     code_fence_char = char
+                    code_block_decorated = quote_level > 0
                 elif code_fence_char == char:
                     in_code_block = False
                     code_fence_char = None
-
-        # 去除行首装饰（但代码块内不做）
-        if not in_code_block:
-            line, _ = _strip_decorations(line)
-
-            # 去掉边框整行
-            if _is_border_line(line):
-                line = ''
+                    code_block_decorated = False
 
         # 分组
         if line_type != current_group_type:
@@ -357,7 +495,7 @@ def clean(raw_text: str) -> str:
             # 空行：最多保留一个
             result_lines.append('')
 
-        elif group_type in ('list', 'heading', 'table'):
+        elif group_type in ('list', 'heading', 'table', 'quote'):
             # 保留结构，只去公共缩进
             # 但保留列表的缩进层级
             indent = _detect_common_indent(group_lines)
@@ -368,8 +506,11 @@ def clean(raw_text: str) -> str:
             else:
                 processed = group_lines
 
+            if group_type == 'table':
+                narrative = _table_to_narrative(processed)
+                result_lines.extend(narrative if narrative is not None else processed)
             # 列表项内部：如果列表项跨多行，保守合并
-            if group_type == 'list':
+            elif group_type == 'list':
                 merged = []
                 for pl in processed:
                     if _UNORDERED_LIST.match(pl) or _ORDERED_LIST.match(pl):
@@ -389,6 +530,7 @@ def clean(raw_text: str) -> str:
             if non_blank:
                 indent = _detect_common_indent(non_blank)
                 dedented = _remove_common_indent(non_blank, indent)
+                dedented = _remove_continuation_indent(dedented)
                 merged = _merge_hard_wraps(dedented)
                 result_lines.extend(merged)
             # 保留组内的空行位置
@@ -437,6 +579,19 @@ def has_format_artifacts(text: str) -> bool:
     min_indent = min(len(l) - len(l.lstrip()) for l in non_blank)
     if min_indent >= 2:
         return True
+
+    # 1b. Claude/Ghostty 常见硬换行：首行无缩进，后续行有 2 空格缩进
+    # 例如 narrow pane 复制出的回答：
+    #   第一行没有缩进
+    #     后续视觉续行带两个空格
+    if len(non_blank) >= 2:
+        first_indent = len(non_blank[0]) - len(non_blank[0].lstrip(' '))
+        continuation_indents = [
+            len(line) - len(line.lstrip(' ')) for line in non_blank[1:]
+        ]
+        continuation_count = sum(indent >= 2 for indent in continuation_indents)
+        if first_indent == 0 and continuation_count >= 1:
+            return True
 
     # 2. 行首引用装饰
     for line in non_blank:
