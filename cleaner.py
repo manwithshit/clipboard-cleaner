@@ -143,7 +143,9 @@ def _classify_line(line: str, in_code_block: bool) -> BlockType:
 # 行首装饰：引用竖线 | > ｜ │ ▎（支持多层嵌套）
 # ▎ (U+258E LEFT ONE QUARTER BLOCK) 是 Claude Code 的实际引用标记
 # 匹配形式：> text, > > text, | | text, ｜ ｜ text, ▎ text, ▎ ▎ text 等
-_NESTED_QUOTE = re.compile(r'^(\s*)((?:[│｜|>▎]\s*)+)')
+# 装饰字符后**至多吃 1 个空格**（之前是 \s* 太贪婪，会把代码缩进等内容
+# 空格也吃掉，比如 `▎     return x` 中的 4 空格代码缩进）
+_NESTED_QUOTE = re.compile(r'^(\s*)((?:[│｜|>▎] ?)+)')
 
 # 单个装饰字符（用于计算嵌套层级）
 _SINGLE_DECOR = re.compile(r'[│｜|>▎]\s*')
@@ -175,8 +177,9 @@ _CC_PREFIX_MARKER = re.compile(r'^([⏺⎿])\s*')
 # YAML front-matter 检测
 # 标准形式：---\nkey: value\n---
 # 伪形式：---  key: value 或 ---key: value（GPT/Claude 偶尔输出）
-_FRONTMATTER_DELIM = re.compile(r'^---\s*$')
-_PSEUDO_FRONTMATTER_HEAD = re.compile(r'^---\s*["\']?[\w-]+["\']?\s*:')
+# 允许行首有空格（Claude Code 输出常带 2 空格缩进）
+_FRONTMATTER_DELIM = re.compile(r'^\s*---\s*$')
+_PSEUDO_FRONTMATTER_HEAD = re.compile(r'^\s*---\s*["\']?[\w-]+["\']?\s*:')
 
 
 def _strip_cc_prefix(lines: list[str]) -> list[str]:

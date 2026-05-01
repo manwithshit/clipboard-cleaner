@@ -794,3 +794,38 @@ def test_cc_prefix_plus_pseudo_frontmatter():
     assert 'title' not in result
     assert 'date' not in result
     assert result == '正文内容'
+
+
+def test_pseudo_frontmatter_with_leading_whitespace():
+    """实战发现：行首带空格的 front-matter（` ---title: ...`）也要兜底剥除。"""
+    raw = ' ---title: 文档\n  date: 2026-05-01\n\n正文'
+    result = clean(raw)
+    assert 'title' not in result
+    assert 'date' not in result
+    assert result == '正文'
+
+
+def test_standard_frontmatter_with_leading_whitespace():
+    """标准 front-matter 第一行 `---` 也允许有行首空格。"""
+    raw = '  ---\n  title: foo\n  ---\n正文'
+    result = clean(raw)
+    assert 'title' not in result
+    assert result == '正文'
+
+
+def test_quote_preserves_inner_indent():
+    """实战发现：单层引用里的代码缩进不能被吃掉。"""
+    raw = '▎ def strategy():\n▎     return "空城计"'
+    result = clean(raw)
+    lines = result.split('\n')
+    assert lines[0] == '〔引〕def strategy():'
+    # 第二行的 4 空格代码缩进必须保留
+    assert lines[1] == '〔引〕    return "空城计"'
+
+
+def test_quote_preserves_inner_indent_nested():
+    """嵌套引用里的内容缩进同样不能被装饰正则吃掉。"""
+    raw = '> >     有 4 空格缩进的内容'
+    result = clean(raw)
+    # 应该是 〔引²〕    有 4 空格缩进的内容
+    assert result == '〔引²〕    有 4 空格缩进的内容'
