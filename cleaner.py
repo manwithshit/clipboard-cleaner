@@ -23,6 +23,14 @@ _IS_BORDER = re.compile(
     r'^[─━│┃┌┏┐┓└┗┘┛├┝┤┥┨┩┪┫┬┭┮┯┰┱┲┳┴┵┶┷┸┹┺┻┼┽┾┿╀╁╂╃╄╅╆╇╈╉╊╋═║\s+\-+|]+$'
 )
 
+# 行内含 ≥ 3 个连续 box-drawing 字符（用于检测表格内任意行）
+_BOX_DRAWING_RUN = re.compile(
+    r'[─━│┃┌┏┐┓└┗┘┛├┝┤┞┟┠┡┢┣┤┥┦┧┨┩┪┫┬┭┮┯┰┱┲┳┴┵┶┷┸┹┺┻┼┽┾┿╀╁╂╃╄╅╆╇╈╉╊╋═║]{3,}'
+)
+
+# 中文（CJK Unified Ideographs）字符检测
+_HAS_CJK = re.compile(r'[一-鿿]')
+
 # Fenced code block 标记
 _FENCE = re.compile(r'^\s*(```|~~~)')
 
@@ -867,11 +875,13 @@ def has_format_artifacts(text: str) -> bool:
 
     检测条件（满足任一即可）：
     1. 所有非空行有 ≥ 2 空格公共缩进
-    2. 存在行首引用装饰（> 、| 、▎ 等）
-    3. 多行以 > 或 ▎ 开头
-    4. 存在 ASCII 边框整行
-    5. 存在 trailing spaces（≥ 2 个行尾空格）
-    6. 存在代码块围栏（``` 或 ~~~）
+    2. 首行无缩进 + 后续行有 ≥ 2 空格缩进（终端硬换行常见模式）
+    3. 行首引用装饰（> 、▎ 、| 、｜ 、│ 等）
+    4. 行内含 ≥ 3 个连续 box-drawing 字符（表格内容行也能触发）
+    5. 含 Claude Code 输出标记（⏺ ⎿）
+    6. Trailing spaces（≥ 2 个）或 Tab
+    7. 代码块围栏（``` 或 ~~~）
+    8. 兜底：≥ 3 行的中文文本（终端复制的典型场景）
     """
     if not text:
         return False
@@ -887,10 +897,7 @@ def has_format_artifacts(text: str) -> bool:
     if min_indent >= 2:
         return True
 
-    # 1b. Claude/Ghostty 常见硬换行：首行无缩进，后续行有 2 空格缩进
-    # 例如 narrow pane 复制出的回答：
-    #   第一行没有缩进
-    #     后续视觉续行带两个空格
+    # 2. Claude/Ghostty 常见硬换行：首行无缩进，后续行有 2 空格缩进
     if len(non_blank) >= 2:
         first_indent = len(non_blank[0]) - len(non_blank[0].lstrip(' '))
         continuation_indents = [
@@ -900,26 +907,32 @@ def has_format_artifacts(text: str) -> bool:
         if first_indent == 0 and continuation_count >= 1:
             return True
 
-    # 2. 行首引用装饰
+    # 3. 行首引用装饰（含 box-drawing 竖线 │ U+2502）
     for line in non_blank:
         stripped = line.lstrip()
-        if stripped.startswith(('> ', '▎ ', '| ', '｜ ', '>')):
+        if stripped.startswith(('> ', '▎ ', '| ', '｜ ', '│ ', '│', '>')):
             return True
 
-    # 3. ASCII 边框整行
-    for line in non_blank:
-        stripped = line.strip()
-        if len(stripped) >= 3 and _IS_BORDER.match(stripped):
-            return True
+    # 4. 行内含 ≥ 3 个连续 box-drawing 字符（表格的任意一行都能触发）
+    if _BOX_DRAWING_RUN.search(text):
+        return True
 
-    # 4. Trailing spaces（≥ 2 个）
+    # 5. Claude Code 输出标记
+    if '⏺' in text or '⎿' in text:
+        return True
+
+    # 6. Trailing spaces（≥ 2 个）或 Tab
     for line in lines:
         if line.endswith('  ') or line.endswith('\t'):
             return True
 
-    # 5. 代码块围栏
+    # 7. 代码块围栏
     for line in non_blank:
         if line.strip().startswith(('```', '~~~')):
             return True
+
+    # 8. 兜底：≥ 3 行的中文文本（终端复制典型场景）
+    if len(non_blank) >= 3 and _HAS_CJK.search(text):
+        return True
 
     return False

@@ -133,20 +133,37 @@ def test_hash_text():
     assert h1 != h3
 
 
-def test_duplicate_rejected_after_hash_history_prune():
-    """hash 历史超过上限后仍应按插入顺序保留最近记录。"""
+def test_dedup_bounded_by_history_only():
+    """去重边界 = 当前历史中的条目，超出 MAX_HISTORY 被挤掉的旧条目可重新加入。"""
     state = AppState()
-    state._MAX_HASH_HISTORY = 6
-    for i in range(8):
+    # 灌满 10 条历史
+    for i in range(10):
         assert state.add_item(_make_item(f'content {i}')) is True
 
-    # 最新一半应仍在去重窗口内
-    assert state.add_item(_make_item('content 5')) is False
-    assert state.add_item(_make_item('content 6')) is False
-    assert state.add_item(_make_item('content 7')) is False
+    # 当前历史中的内容不应重复加入
+    assert state.add_item(_make_item('content 9')) is False
+    assert state.add_item(_make_item('content 0')) is False
 
-    # 很早的条目可被去重窗口淘汰
+    # 再加 5 条新内容，把 content 0-4 挤出历史
+    for i in range(10, 15):
+        assert state.add_item(_make_item(f'content {i}')) is True
+
+    # 被挤出去的旧条目现在可以重新加入
     assert state.add_item(_make_item('content 0')) is True
+    assert state.add_item(_make_item('content 1')) is True
+
+
+def test_dedup_after_clear():
+    """clear 后，之前的内容应能重新加入（去重窗口随之清空）。"""
+    state = AppState()
+    item = _make_item('hello world')
+    assert state.add_item(item) is True
+    assert state.add_item(_make_item('hello world')) is False
+
+    state.clear()
+
+    # 清空后，相同内容应能重新加入
+    assert state.add_item(_make_item('hello world')) is True
 
 
 def test_program_copy_can_suppress_exact_content():

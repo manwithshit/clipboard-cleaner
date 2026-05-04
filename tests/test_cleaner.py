@@ -32,6 +32,52 @@ def test_detect_claude_continuation_indent_artifact():
     assert has_format_artifacts(raw) is True
 
 
+def test_detect_box_drawing_table():
+    """box-drawing 表格（含数据行 │、边框行 ┌ ─ ┘ 等）必须被检测到。"""
+    from cleaner import has_format_artifacts
+
+    raw = (
+        '┌────────────────────┬────────────────────┐\n'
+        '│       武将          │       武力值        │\n'
+        '├────────────────────┼────────────────────┤\n'
+        '│       关羽          │         97          │\n'
+        '└────────────────────┴────────────────────┘'
+    )
+    assert has_format_artifacts(raw) is True
+
+
+def test_detect_box_drawing_run_inline():
+    """行内含 ≥ 3 个连续 box-drawing 字符也应触发。"""
+    from cleaner import has_format_artifacts
+
+    raw = '正文内容里有 ─── 这种分隔线'
+    assert has_format_artifacts(raw) is True
+
+
+def test_detect_claude_code_markers():
+    """Claude Code 的 ⏺ ⎿ 输出标记必须被检测到。"""
+    from cleaner import has_format_artifacts
+
+    raw = '⏺ 已完成任务\n⎿ 详情见日志'
+    assert has_format_artifacts(raw) is True
+
+
+def test_detect_chinese_multiline_fallback():
+    """≥ 3 行中文文本（即使没有缩进或装饰符）也应触发兜底规则。"""
+    from cleaner import has_format_artifacts
+
+    raw = '曹操率领八十三万大军南下\n诸葛亮舌战群儒说服东吴抗曹\n周瑜定计火烧赤壁。'
+    assert has_format_artifacts(raw) is True
+
+
+def test_skip_short_clean_text():
+    """单行无格式特征的纯英文文本不应触发（避免误捕获语音输入等）。"""
+    from cleaner import has_format_artifacts
+
+    raw = 'hello world'
+    assert has_format_artifacts(raw) is False
+
+
 def test_remove_claude_continuation_indent():
     """清洗首行无缩进、后续行带 2 空格的硬换行。"""
     raw = 'Codex 改得不错。5\n  个发现都是真实问题\n  ，修复方案合理'

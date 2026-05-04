@@ -39,43 +39,25 @@ class AppState:
         self.history: deque[ClipboardItem] = deque(maxlen=MAX_HISTORY)
         self.lock = threading.Lock()
 
-        # 去重：最近 N 条 raw_hash + cleaned_hash
-        self._recent_raw_hashes: set[str] = set()
-        self._recent_cleaned_hashes: set[str] = set()
-        self._recent_raw_order: deque[str] = deque()
-        self._recent_cleaned_order: deque[str] = deque()
-        self._MAX_HASH_HISTORY = 50
-
         # 反馈回路抑制
         self._program_copy_time: float = 0  # 最近一次程序写入剪贴板的时间
         self._program_copy_hash: str | None = None
 
     def add_item(self, item: ClipboardItem) -> bool:
-        """添加新条目。若已存在则返回 False。"""
+        """添加新条目。若与当前历史中任一条目重复则返回 False。
+
+        去重边界为当前 MAX_HISTORY 条历史。被挤出历史的旧条目不再参与去重，
+        允许用户重新捕获之前清空或挤掉的内容。
+        """
         with self.lock:
-            if item.raw_hash in self._recent_raw_hashes:
-                return False
-            if item.cleaned_hash in self._recent_cleaned_hashes:
-                return False
+            for existing in self.history:
+                if existing.raw_hash == item.raw_hash:
+                    return False
+                if existing.cleaned_hash == item.cleaned_hash:
+                    return False
 
             self.history.appendleft(item)
-            self._remember_hash(item.raw_hash, self._recent_raw_hashes,
-                                self._recent_raw_order)
-            self._remember_hash(item.cleaned_hash, self._recent_cleaned_hashes,
-                                self._recent_cleaned_order)
-
             return True
-
-    def _remember_hash(self, value: str, values: set[str], order: deque[str]):
-        """按插入顺序维护有限 hash 窗口。"""
-        values.add(value)
-        order.append(value)
-
-        if len(order) > self._MAX_HASH_HISTORY:
-            keep = max(1, self._MAX_HASH_HISTORY // 2)
-            while len(order) > keep:
-                old = order.popleft()
-                values.discard(old)
 
     def snapshot(self) -> list[ClipboardItem]:
         """返回历史条目的线程安全快照。"""
