@@ -708,6 +708,15 @@ _BOX_TABLE_CLOSERS = _BOX_DATA_OPEN | _BOX_BORDER_CLOSE
 
 _NEW_ROW_STARTERS = frozenset('┌┏├┝└┗')  # 新表格行的起始字符
 
+# 装饰代码块边界：`│ ```` `▎ ```` `> ```` `| ```` 等。
+# 引用装饰中 `│` 与 box-table opener 重叠，必须在合并前提前识别为 fence。
+_DECORATED_FENCE = re.compile(r'^\s*[│┃|｜>▎]\s*(```|~~~)')
+
+# 引用装饰 + box 表格数据行：`> │ data │` `▎ │ data │` 等
+# 注意：装饰部分只匹配非 box 字符（>▎|｜），因为 │ 本身既可能是装饰也可能是表格 opener，
+# 这里要让 │ 留给表格识别
+_QUOTED_BOX_TABLE = re.compile(r'^(\s*)((?:[>▎|｜]\s*)+)(│.*│)\s*$')
+
 
 def _merge_wrapped_box_table_lines(lines: list[str]) -> list[str]:
     """合并被终端窄度折断的 box-drawing 表格碎片行。
@@ -736,8 +745,8 @@ def _merge_wrapped_box_table_lines(lines: list[str]) -> list[str]:
     while i < len(lines):
         line = lines[i]
 
-        # 跟踪 fenced code block 状态
-        fence_match = _FENCE.match(line.strip())
+        # 跟踪 fenced code block 状态（包括装饰式 fence，如 `│ ``` ` `> ``` `）
+        fence_match = _FENCE.match(line.strip()) or _DECORATED_FENCE.match(line)
         if fence_match:
             char = fence_match.group(1)[0]
             if not in_code_block:
@@ -885,16 +894,23 @@ def clean(raw_text: str) -> str:
             # 跳过引用剥离和边框删除，直接进入 table 组让后续转条目
             line_type = 'table'
         else:
-            line, quote_level = _strip_decorations(line)
+            # 引用装饰下的 box 表格行（如 `> │ data │`）：
+            # 剥外层引用装饰，保留内部 │ 表格结构后归入 table
+            quoted_box_match = _QUOTED_BOX_TABLE.match(line)
+            if quoted_box_match:
+                line = quoted_box_match.group(1) + quoted_box_match.group(3)
+                line_type = 'table'
+            else:
+                line, quote_level = _strip_decorations(line)
 
-            # 去掉边框整行
-            if _is_border_line(line):
-                line = ''
+                # 去掉边框整行
+                if _is_border_line(line):
+                    line = ''
 
-            line_type = _classify_line(line, in_code_block)
+                line_type = _classify_line(line, in_code_block)
 
-            if quote_level >= 1 and line_type == 'normal':
-                line_type = 'quote'
+                if quote_level >= 1 and line_type == 'normal':
+                    line_type = 'quote'
 
         # 处理 fenced code block 边界
         if line_type == 'code' and _FENCE.match(line.strip()):

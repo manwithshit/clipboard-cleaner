@@ -241,6 +241,53 @@ def test_pseudo_frontmatter_real_yaml_still_strips():
     assert result == '正文'
 
 
+# === 三轮 review 修复：装饰 fence + 引用 box 表格 ===
+
+def test_box_decorated_fence_code_block():
+    """`│ ``` ` 装饰的代码块不应被表格合并器误吞。"""
+    raw = '│ ```\n│ │ foo\n│ bar\n│ ```'
+    result = clean(raw)
+    # 代码块内容保留
+    assert 'foo' in result
+    assert 'bar' in result
+    # 不应返回空字符串
+    assert result != ''
+
+
+def test_quote_decorated_fence_other_chars():
+    """其他装饰字符（▎ | ｜ >）的代码块也应正确处理。"""
+    for decor in ['▎', '|', '｜', '>']:
+        raw = f'{decor} ```\n{decor} foo\n{decor} ```'
+        result = clean(raw)
+        assert 'foo' in result, f'{decor} decorated fence failed: {result!r}'
+
+
+def test_quoted_box_table_classified_as_table():
+    """`> │ data │` 这种引用块内的 box 表格应被识别为表格转条目。"""
+    raw = '> │ 人物 │ 性格 │\n> │ 林黛玉 │ 多愁善感 │'
+    result = clean(raw)
+    # 应该转成数字条目，而不是 〔引〕 标记
+    assert '〔引' not in result
+    assert '1. 人物：林黛玉' in result
+    assert '性格：多愁善感' in result
+
+
+def test_quoted_box_table_with_other_decorations():
+    """其他引用装饰字符（▎ | ｜）下的 box 表格也应正确识别。"""
+    for decor in ['▎', '|', '｜']:
+        raw = f'{decor} │ A │ B │\n{decor} │ x │ y │'
+        result = clean(raw)
+        assert '〔引' not in result, f'{decor} prefix failed: {result!r}'
+        assert '1. A：x' in result, f'{decor} prefix failed: {result!r}'
+
+
+def test_normal_quote_text_still_decorated():
+    """普通引用文字不受影响，仍应加 〔引〕 标记。"""
+    raw = '> 这是普通引用\n> 第二行'
+    result = clean(raw)
+    assert '〔引〕' in result
+
+
 def test_remove_claude_continuation_indent():
     """清洗首行无缩进、后续行带 2 空格的硬换行。"""
     raw = 'Codex 改得不错。5\n  个发现都是真实问题\n  ，修复方案合理'
