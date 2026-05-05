@@ -262,11 +262,25 @@ def _strip_frontmatter(lines: list[str]) -> list[str]:
 
     # 伪 front-matter：--- 跟在同一行的 key: value
     if _PSEUDO_FRONTMATTER_HEAD.match(lines[0]):
+        # 找到第一个空行作为 frontmatter 终止
+        end = len(lines)
         for i in range(1, len(lines)):
             if not lines[i].strip():
-                return lines[i + 1:]
-        # 全是 front-matter 内容，全部消除
-        return []
+                end = i
+                break
+
+        # 把首行的 `---` 前缀剥离后，与后续行组成 body 做 YAML 校验
+        first_line_body = re.sub(r'^\s*---\s*', '', lines[0])
+        body = [first_line_body] + list(lines[1:end])
+
+        if _looks_like_yaml_frontmatter(body):
+            # 真 YAML：消除整段 frontmatter
+            if end < len(lines):
+                return lines[end + 1:]
+            return []
+
+        # body 不像纯 YAML：只剥掉首行的 `---` 前缀，正文保留
+        return [first_line_body] + lines[1:]
 
     return lines
 
@@ -708,14 +722,40 @@ def _merge_wrapped_box_table_lines(lines: list[str]) -> list[str]:
     - 如果当前未形成完整表格行，**必须**吞并下一行；
     - 如果当前已完整，只在下一行明显是「续行碎片」时才继续吞并
       （不能以新行起始字符 ┌├└ 开头，且不是独立完整表格行）
+
+    重要：跳过 fenced code block 内容，避免误吞代码行。
     """
     if len(lines) < 2:
         return lines
 
     result: list[str] = []
     i = 0
+    in_code_block = False
+    code_fence_char: str | None = None
+
     while i < len(lines):
         line = lines[i]
+
+        # 跟踪 fenced code block 状态
+        fence_match = _FENCE.match(line.strip())
+        if fence_match:
+            char = fence_match.group(1)[0]
+            if not in_code_block:
+                in_code_block = True
+                code_fence_char = char
+            elif code_fence_char == char:
+                in_code_block = False
+                code_fence_char = None
+            result.append(line)
+            i += 1
+            continue
+
+        # 在代码块内部时不做表格合并
+        if in_code_block:
+            result.append(line)
+            i += 1
+            continue
+
         stripped = line.lstrip()
 
         if not stripped or stripped[0] not in _BOX_TABLE_OPENERS:
@@ -737,6 +777,9 @@ def _merge_wrapped_box_table_lines(lines: list[str]) -> list[str]:
                 break
             # 下一行本身已是完整表格行 → 是新行，不合并
             if _is_box_table_line(next_line):
+                break
+            # 下一行是 fence → 不能跨代码块边界合并
+            if _FENCE.match(next_stripped):
                 break
 
             if is_complete:

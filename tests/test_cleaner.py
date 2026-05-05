@@ -189,6 +189,58 @@ def test_no_table_content_unaffected():
     assert clean(raw) == '这是一段普通文字第二行也是普通的'
 
 
+# === P1 修复：表格预处理不能破坏代码块 ===
+
+def test_box_char_in_code_block_preserved():
+    """代码块内含 box-drawing 字符的行，不应被表格预处理误吞。"""
+    raw = '```\n│ foo\nbar\n```'
+    result = clean(raw)
+    # 代码块内的两行应该原样保留，不能被合并
+    assert '│ foo' in result
+    assert 'bar' in result
+    # 不能拼成 `│ foobar`
+    assert '│ foobar' not in result
+
+
+def test_box_char_in_code_block_with_fence_marker():
+    """代码块结尾的 ``` 不应被表格预处理吞进碎片。"""
+    raw = '```\n│ data │ value │\n│ a │ b │\n```\n正文'
+    result = clean(raw)
+    # 代码块内容保留
+    assert '│ data │ value │' in result
+    assert '│ a │ b │' in result
+    # 正文也保留
+    assert '正文' in result
+
+
+def test_table_outside_code_block_still_merges():
+    """代码块外的折行表格仍能正常合并（防止过度修复）。"""
+    raw = '```\nplain code\n```\n┌────\n────┐\n│ 林黛\n玉 │\n└────\n────┘'
+    result = clean(raw)
+    assert 'plain code' in result
+    assert '林黛玉' in result
+
+
+# === P2 修复：伪 frontmatter 复用 YAML 校验 ===
+
+def test_pseudo_frontmatter_with_prose_not_stripped():
+    """伪 frontmatter 中夹杂普通段落时，不应整段吞掉。"""
+    raw = '---title: foo\n这是普通段落\n\n正文'
+    result = clean(raw)
+    # 普通段落必须保留
+    assert '这是普通段落' in result
+    assert '正文' in result
+
+
+def test_pseudo_frontmatter_real_yaml_still_strips():
+    """真正的伪 frontmatter（多个 key:value）仍应被剥离。"""
+    raw = '---title: foo\nauthor: bar\n\n正文'
+    result = clean(raw)
+    assert 'title' not in result
+    assert 'author' not in result
+    assert result == '正文'
+
+
 def test_remove_claude_continuation_indent():
     """清洗首行无缩进、后续行带 2 空格的硬换行。"""
     raw = 'Codex 改得不错。5\n  个发现都是真实问题\n  ，修复方案合理'
