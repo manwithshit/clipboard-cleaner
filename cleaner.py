@@ -189,16 +189,59 @@ _CC_PREFIX_MARKER = re.compile(r'^([⏺⎿])\s*')
 _FRONTMATTER_DELIM = re.compile(r'^\s*---\s*$')
 _PSEUDO_FRONTMATTER_HEAD = re.compile(r'^\s*---\s*["\']?[\w-]+["\']?\s*:')
 
+# YAML key:value 行：可选引号 + 标识符 + 冒号
+_YAML_KEY_LINE = re.compile(r'^\s*["\']?[\w.\-]+["\']?\s*:')
+# YAML 续行（缩进开头，允许 - 列表项 / 引号 / 普通字符）
+_YAML_CONT_LINE = re.compile(r'^\s+\S')
+# YAML 注释行
+_YAML_COMMENT_LINE = re.compile(r'^\s*#')
+
 
 def _strip_cc_prefix(lines: list[str]) -> list[str]:
     """去除 Claude Code 输出行的前缀标记 ⏺ / ⎿。"""
     return [_CC_PREFIX_MARKER.sub('', line) for line in lines]
 
 
+def _looks_like_yaml_frontmatter(body_lines: list[str]) -> bool:
+    """判断 `---` 包围的内容是否真的是 YAML front-matter。
+
+    要求：
+    - 至少有一个 key:value 行
+    - 除了 key:value、缩进续行、注释、空行外，没有其他类型的内容
+      （否则可能是普通文本被两个 `---` 包住，应作为水平分割线处理）
+    """
+    if not body_lines:
+        return False
+
+    has_key_value = False
+    last_was_key = False
+
+    for line in body_lines:
+        stripped = line.strip()
+        if not stripped:
+            last_was_key = False
+            continue
+        if _YAML_COMMENT_LINE.match(line):
+            continue
+        if _YAML_KEY_LINE.match(line):
+            has_key_value = True
+            last_was_key = True
+            continue
+        # 缩进续行只在前一行是 key 时合法
+        if last_was_key and _YAML_CONT_LINE.match(line):
+            continue
+        # 出现非 YAML 形态的内容，整体视为非 frontmatter
+        return False
+
+    return has_key_value
+
+
 def _strip_frontmatter(lines: list[str]) -> list[str]:
     """剥离文本开头的 YAML front-matter（标准或伪格式）。
 
     标准：第一行是 `---`，到下一行 `---` 之间整段消除（含两个分隔符）。
+            **仅当中间内容真的看起来像 YAML 时**才剥离，避免把 `---\\n正文\\n---`
+            这种水平分割块误吃掉。
     伪格式：第一行是 `---  title: "..."`（GPT 误把 `---` 和首字段写一行），
             从该行开始消除直到第一个空行（含开头那行）。
     """
@@ -209,7 +252,11 @@ def _strip_frontmatter(lines: list[str]) -> list[str]:
     if _FRONTMATTER_DELIM.match(lines[0].strip()):
         for i in range(1, len(lines)):
             if _FRONTMATTER_DELIM.match(lines[i].strip()):
-                return lines[i + 1:]
+                body = lines[1:i]
+                if _looks_like_yaml_frontmatter(body):
+                    return lines[i + 1:]
+                # 不是 YAML，去掉首尾两个 `---`，正文保留
+                return body + lines[i + 1:]
         # 没找到收尾分隔符，保持原样
         return lines
 
@@ -641,6 +688,82 @@ def _is_box_table_line(line: str) -> bool:
     return False
 
 
+_BOX_TABLE_OPENERS = _BOX_DATA_OPEN | _BOX_BORDER_OPEN
+_BOX_TABLE_CLOSERS = _BOX_DATA_OPEN | _BOX_BORDER_CLOSE
+
+
+_NEW_ROW_STARTERS = frozenset('┌┏├┝└┗')  # 新表格行的起始字符
+
+
+def _merge_wrapped_box_table_lines(lines: list[str]) -> list[str]:
+    """合并被终端窄度折断的 box-drawing 表格碎片行。
+
+    场景 1：`│ 林黛玉 │ 多愁善感 │` 因终端列宽不足被折成
+        ``│ 林黛玉 │`` + ``多愁善感 │``
+    场景 2：``┌─────`` 后接 ``─────┐`` 这种边框行被折断
+    场景 3：``│ 人物 │ 性格`` 后接 ``            │`` 这种孤立续行
+
+    策略：
+    - 当前行以表格 opener 开头时进入合并流程
+    - 如果当前未形成完整表格行，**必须**吞并下一行；
+    - 如果当前已完整，只在下一行明显是「续行碎片」时才继续吞并
+      （不能以新行起始字符 ┌├└ 开头，且不是独立完整表格行）
+    """
+    if len(lines) < 2:
+        return lines
+
+    result: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.lstrip()
+
+        if not stripped or stripped[0] not in _BOX_TABLE_OPENERS:
+            result.append(line)
+            i += 1
+            continue
+
+        leading_indent = line[:len(line) - len(stripped)]
+        merged_body = stripped
+        is_complete = _is_box_table_line(leading_indent + merged_body)
+        j = i + 1
+        max_lookahead = 5
+
+        while j < len(lines) and (j - i) <= max_lookahead:
+            next_line = lines[j]
+            next_stripped = next_line.strip()
+
+            if not next_stripped:
+                break
+            # 下一行本身已是完整表格行 → 是新行，不合并
+            if _is_box_table_line(next_line):
+                break
+
+            if is_complete:
+                # 当前已完整：只在下一行是续行碎片时继续合并
+                # 排除以新行起始字符开头的（那是新行碎片）
+                if next_stripped[0] in _NEW_ROW_STARTERS:
+                    break
+                # 续行特征：末尾是 closer，或整行仅由 box+空白构成
+                is_continuation = (
+                    next_stripped[-1] in _BOX_TABLE_CLOSERS or
+                    all(c in _BOX_BORDER_INNER or c.isspace()
+                        for c in next_stripped)
+                )
+                if not is_continuation:
+                    break
+
+            # 吞并
+            merged_body = merged_body.rstrip() + next_stripped
+            j += 1
+            is_complete = _is_box_table_line(leading_indent + merged_body)
+
+        result.append(leading_indent + merged_body)
+        i = j
+
+    return result
+
+
 def _box_table_to_narrative(lines: list[str]) -> list[str] | None:
     """把 box-drawing 表格转成数字条目列表。"""
     data_rows: list[list[str]] = []
@@ -690,6 +813,10 @@ def clean(raw_text: str) -> str:
 
     # Step 2: 去尾空格（所有行）
     lines = [line.rstrip() for line in lines]
+
+    # Step 2b: 合并被窄终端折断的 box-drawing 表格行
+    # 必须在分类前，否则碎片会被 _strip_decorations 当成引用块加 〔引〕
+    lines = _merge_wrapped_box_table_lines(lines)
 
     # Step 3: 识别并处理各行
     in_code_block = False

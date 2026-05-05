@@ -78,6 +78,117 @@ def test_skip_short_clean_text():
     assert has_format_artifacts(raw) is False
 
 
+# === Frontmatter 假阳性修复 ===
+
+def test_frontmatter_false_positive_kept_as_content():
+    """非 YAML 内容被两个 `---` 包住时，不应整段剥离。"""
+    raw = '---\n正文\n---'
+    assert clean(raw) == '正文'
+
+
+def test_frontmatter_false_positive_with_indent():
+    """带缩进的 `  ---` 也要正确处理（终端复制场景）。"""
+    raw = '  ---\n  正文\n  ---'
+    assert clean(raw) == '正文'
+
+
+def test_frontmatter_false_positive_chinese_paragraph():
+    """中文段落被两个 `---` 包住，应保留段落。"""
+    raw = '''---
+妹诗社雅集，黛玉才情出众。
+贾府繁华背后暗藏衰败。
+---'''
+    result = clean(raw)
+    assert '妹诗社雅集' in result
+    assert '贾府繁华' in result
+
+
+def test_frontmatter_real_yaml_still_strips():
+    """真正的 YAML frontmatter 仍应被剥离。"""
+    raw = '---\ntitle: foo\ndate: 2026-05-05\n---\n正文'
+    assert clean(raw) == '正文'
+
+
+def test_frontmatter_yaml_with_list_value():
+    """YAML 含列表值的 frontmatter 仍应被剥离。"""
+    raw = '---\ntitle: foo\ntags:\n  - a\n  - b\n---\n正文'
+    assert clean(raw) == '正文'
+
+
+def test_frontmatter_yaml_with_comment():
+    """YAML 含注释行的 frontmatter 仍应被剥离。"""
+    raw = '---\n# 注释\ntitle: foo\n---\n正文'
+    assert clean(raw) == '正文'
+
+
+def test_frontmatter_mixed_content_not_stripped():
+    """如果 `---` 包围的内容混合了 YAML 和散文，不剥离（更安全）。"""
+    raw = '---\ntitle: foo\n这是普通段落，不是 YAML\n---\n正文'
+    result = clean(raw)
+    # 散文内容应保留
+    assert '这是普通段落' in result
+
+
+# === 表格折行预处理修复 ===
+
+def test_wrapped_box_table_single_cell():
+    """单单元格表格被折成两行，应正确拼接。"""
+    raw = '''┌────
+────┐
+│ 林黛
+玉 │
+└────
+────┘'''
+    result = clean(raw)
+    assert result == '林黛玉'
+
+
+def test_wrapped_box_table_multicol():
+    """多列表格被窄终端折行，应识别为表格并转条目。"""
+    raw = '''  ┌────────────────────┬────────────
+  ────────┐
+  │       人物          │       性格
+            │
+  ├────────────────────┼────────────
+  ────────┤
+  │       林黛玉        │
+  多愁善感      │
+  └────────────────────┴────────────
+  ────────┘'''
+    result = clean(raw)
+    assert '1. 人物：林黛玉' in result
+    assert '性格：多愁善感' in result
+
+
+def test_wrapped_box_table_orphan_pipe_continuation():
+    """孤立的 │ 续行（如 `   │`）应被并回上一行。"""
+    raw = '''│ 人物 │ 性格
+            │'''
+    # 不应该被识别成引用块
+    result = clean(raw)
+    assert '〔引〕' not in result
+
+
+def test_unwrapped_box_table_still_works():
+    """完整的、未被折行的 box-drawing 表格仍能正常工作（不破坏旧功能）。"""
+    raw = '''┌────────────────────┬────────────────────┐
+│       武将          │       武力值        │
+├────────────────────┼────────────────────┤
+│       关羽          │         97          │
+│       张飞          │         94          │
+└────────────────────┴────────────────────┘'''
+    result = clean(raw)
+    assert '1. 武将：关羽' in result
+    assert '武力值：97' in result
+    assert '2. 武将：张飞' in result
+
+
+def test_no_table_content_unaffected():
+    """没有表格的普通内容不受预处理影响（CJK 硬换行合并保持原行为）。"""
+    raw = '这是一段普通文字\n第二行也是普通的'
+    assert clean(raw) == '这是一段普通文字第二行也是普通的'
+
+
 def test_remove_claude_continuation_indent():
     """清洗首行无缩进、后续行带 2 空格的硬换行。"""
     raw = 'Codex 改得不错。5\n  个发现都是真实问题\n  ，修复方案合理'
