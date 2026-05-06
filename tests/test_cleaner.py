@@ -288,6 +288,74 @@ def test_normal_quote_text_still_decorated():
     assert '〔引〕' in result
 
 
+# === 四轮 review 修复：窄终端折断的 │ 引用块 ===
+
+def test_wrapped_box_quote_single_level():
+    """`│` 引用块被窄终端折断（装饰行 + 无装饰续行）应合成单段 〔引〕。"""
+    raw = (
+        '   │ "木石前盟"指林黛玉前世为绛珠\n'
+        '  仙草，贾宝玉前世为神瑛侍\n'
+        '    │ 者，侍者曾以甘露灌溉仙草，仙\n'
+        '  草发誓下凡以泪偿还灌溉之\n'
+        '    │ 恩。'
+    )
+    result = clean(raw)
+    # 不能有残留的 │
+    assert '│' not in result
+    # 应该是单段 〔引〕
+    assert result.count('〔引〕') == 1
+    # 关键内容都应保留
+    assert '木石前盟' in result
+    assert '神瑛侍者' in result  # 续行合并的关键
+    assert '泪偿还灌溉之恩' in result
+
+
+def test_wrapped_box_quote_nested_level():
+    """嵌套 `│ │` 引用块被折断也应合成单段 〔引²〕。"""
+    raw = (
+        '    │ │ "金玉良缘"指薛宝钗佩戴的金\n'
+        '  锁上刻有"不离不弃"，与\n'
+        '    │ │ 贾宝玉的通灵宝玉上的"莫失莫\n'
+        '  忘"恰好配对，被视为天作\n'
+        '    │ │ 之合。'
+    )
+    result = clean(raw)
+    assert '│' not in result
+    assert result.count('〔引²〕') == 1
+    assert '金玉良缘' in result
+    assert '莫失莫忘' in result  # 续行合并关键
+    assert '天作之合' in result
+
+
+def test_wrapped_box_quote_does_not_break_box_table():
+    """新预处理不应破坏 box-drawing 表格识别。"""
+    raw = (
+        '┌────────┬────────┐\n'
+        '│ 人物    │ 性格    │\n'
+        '├────────┼────────┤\n'
+        '│ 林黛玉  │ 多愁善感 │\n'
+        '└────────┴────────┘'
+    )
+    result = clean(raw)
+    assert '1. 人物：林黛玉' in result
+    assert '性格：多愁善感' in result
+
+
+def test_wrapped_box_quote_skips_inside_code_block():
+    """代码块里的 │ 行不应被引用合并器误处理。"""
+    raw = '```\n│ 这看起来像引用但实际在代码块里\n```'
+    result = clean(raw)
+    assert '│ 这看起来像引用但实际在代码块里' in result
+
+
+def test_wrapped_box_quote_does_not_pull_in_list():
+    """引用行后跟列表项时，列表项不应被吞进引用段。"""
+    raw = '│ 这是引用文本\n- 这是独立列表项'
+    result = clean(raw)
+    # 列表项应保留为独立列表
+    assert '- 这是独立列表项' in result
+
+
 def test_remove_claude_continuation_indent():
     """清洗首行无缩进、后续行带 2 空格的硬换行。"""
     raw = 'Codex 改得不错。5\n  个发现都是真实问题\n  ，修复方案合理'

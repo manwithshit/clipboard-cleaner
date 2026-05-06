@@ -718,6 +718,112 @@ _DECORATED_FENCE = re.compile(r'^\s*[│┃|｜>▎]\s*(```|~~~)')
 _QUOTED_BOX_TABLE = re.compile(r'^(\s*)((?:[>▎|｜]\s*)+)(│.*│)\s*$')
 
 
+def _merge_wrapped_quote_lines(lines: list[str]) -> list[str]:
+    """合并被窄终端折断的引用块：装饰引用行 + 无装饰视觉续行 → 单行引用。
+
+    场景（窄终端复制 Claude/Ghostty 的引用块）::
+
+        │ 引用文本第
+        一行内容
+        │ 引用文本第
+        二行内容
+
+    每个 `│` 行的紧邻无装饰续行视为本引用行的视觉换行延续，应当合并到引用
+    行末尾，否则进入分类阶段时续行会成为独立的 'normal' 段落、引用行单独
+    成段，最终输出会断在错误的位置上。
+
+    跳过场景：
+    - fenced code block 内（含装饰式 fence）
+    - 完整 box-drawing 表格行
+    - 装饰后是表格形态（多 │ 或 | 分隔符且以 │/| 结尾）的行
+    - 续行本身是结构性内容（fence / 标题 / 列表 / 表格 / 边框）
+    """
+    if len(lines) < 2:
+        return lines
+
+    result: list[str] = []
+    i = 0
+    in_code_block = False
+    code_fence_char: str | None = None
+
+    while i < len(lines):
+        line = lines[i]
+
+        fence_match = _FENCE.match(line.strip()) or _DECORATED_FENCE.match(line)
+        if fence_match:
+            char = fence_match.group(1)[0]
+            if not in_code_block:
+                in_code_block = True
+                code_fence_char = char
+            elif code_fence_char == char:
+                in_code_block = False
+                code_fence_char = None
+            result.append(line)
+            i += 1
+            continue
+
+        if in_code_block:
+            result.append(line)
+            i += 1
+            continue
+
+        # 完整 box-table 行不当引用合并
+        if _is_box_table_line(line):
+            result.append(line)
+            i += 1
+            continue
+
+        quote_match = _NESTED_QUOTE.match(line)
+        if not quote_match:
+            result.append(line)
+            i += 1
+            continue
+
+        # 装饰后是表格形态 → 让表格路径处理
+        rest_stripped = line[quote_match.end():].strip()
+        if rest_stripped and (
+            (rest_stripped.count('|') >= 1 and rest_stripped.endswith('|')) or
+            (rest_stripped.count('│') >= 1 and rest_stripped.endswith('│'))
+        ):
+            result.append(line)
+            i += 1
+            continue
+
+        # 是引用行：吞并紧邻的无装饰视觉续行
+        merged = line.rstrip()
+        j = i + 1
+        max_lookahead = 10
+        while j < len(lines) and (j - i) <= max_lookahead:
+            next_line = lines[j]
+            next_stripped = next_line.strip()
+
+            if not next_stripped:
+                break
+            # 下一行有引用装饰 → 是新的引用行（同段或新段）
+            if _NESTED_QUOTE.match(next_line):
+                break
+            # 下一行是 fence / 表格 / 结构性内容 → 不合并
+            if _FENCE.match(next_stripped):
+                break
+            if _is_box_table_line(next_line):
+                break
+            if _UNORDERED_LIST.match(next_line) or _ORDERED_LIST.match(next_line):
+                break
+            if _HEADING.match(next_stripped):
+                break
+            if _BORDER_CHARS.match(next_stripped):
+                break
+
+            # 续行：吞并
+            merged = merged + next_stripped
+            j += 1
+
+        result.append(merged)
+        i = j
+
+    return result
+
+
 def _merge_wrapped_box_table_lines(lines: list[str]) -> list[str]:
     """合并被终端窄度折断的 box-drawing 表格碎片行。
 
@@ -775,6 +881,24 @@ def _merge_wrapped_box_table_lines(lines: list[str]) -> list[str]:
         leading_indent = line[:len(line) - len(stripped)]
         merged_body = stripped
         is_complete = _is_box_table_line(leading_indent + merged_body)
+
+        # 防误吞引用装饰：以 │/┃ 开头但不是完整表格行时，
+        # 检查下一行是否含 │/┃。如果不含，说明这是引用装饰而非表格碎片
+        # （例如 `│ 引用文本第一行` 后面是 `引用文本第二行`）。
+        if not is_complete and stripped[0] in _BOX_DATA_OPEN:
+            next_idx = i + 1
+            if next_idx >= len(lines):
+                result.append(line)
+                i += 1
+                continue
+            next_line_stripped = lines[next_idx].strip()
+            if not next_line_stripped or not any(
+                c in _BOX_DATA_OPEN for c in next_line_stripped
+            ):
+                result.append(line)
+                i += 1
+                continue
+
         j = i + 1
         max_lookahead = 5
 
@@ -869,6 +993,10 @@ def clean(raw_text: str) -> str:
     # Step 2b: 合并被窄终端折断的 box-drawing 表格行
     # 必须在分类前，否则碎片会被 _strip_decorations 当成引用块加 〔引〕
     lines = _merge_wrapped_box_table_lines(lines)
+
+    # Step 2c: 合并被窄终端折断的引用块（装饰行 + 无装饰续行）
+    # 必须在分类前，否则续行会成为独立 normal 段落、引用行单独成段
+    lines = _merge_wrapped_quote_lines(lines)
 
     # Step 3: 识别并处理各行
     in_code_block = False
