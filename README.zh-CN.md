@@ -89,12 +89,6 @@ python3 -m pip install -r requirements-dev.txt
 ### TUI 模式（推荐）
 
 ```bash
-python3 run.py
-```
-
-也可以用包模式运行：
-
-```bash
 python3 -m clipboard_cleaner.cli
 ```
 
@@ -127,7 +121,7 @@ python3 -m clipboard_cleaner.cli
 ### 纯文本模式（pipe 测试）
 
 ```bash
-echo '  缩进的 **加粗** 文本' | python3 run.py --plain
+echo '  缩进的 **加粗** 文本' | python3 -m clipboard_cleaner.cli --plain
 ```
 
 ### 推荐别名

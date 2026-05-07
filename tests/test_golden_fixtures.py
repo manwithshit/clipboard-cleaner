@@ -3,7 +3,7 @@
 
 import pathlib
 import pytest
-from cleaner import clean
+from clipboard_cleaner.cleaner import clean
 
 FIXTURE_DIR = pathlib.Path(__file__).parent / 'fixtures'
 

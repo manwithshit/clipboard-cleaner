@@ -228,11 +228,16 @@ def _cell_width(text: str) -> int:
 
 ```
 clipboard-cleaner/
-├── run.py           # 入口：python run.py (TUI) / python run.py --plain
-├── model.py         # ClipboardItem + AppState（线程安全）
-├── clipboard.py     # 剪贴板轮询 + 格式特征过滤 + 反馈抑制 + 去重
-├── cleaner.py       # 清洗管线 + has_format_artifacts
-├── tui.py           # curses TUI + CJK 宽度 + resize 自适应
+├── clipboard_cleaner/
+│   ├── cli.py               # 入口：python -m clipboard_cleaner.cli
+│   ├── state.py             # ClipboardItem + AppState（线程安全）
+│   ├── cleaner/
+│   │   └── pipeline.py      # 清洗管线 + has_format_artifacts
+│   ├── clipboard/
+│   │   └── monitor.py       # 剪贴板轮询 + 格式特征过滤 + 反馈抑制 + 去重
+│   └── tui/
+│       ├── app.py           # curses TUI + 按键处理
+│       └── rendering.py     # CJK 宽度 + 折行/截断/滚动辅助
 ├── .gitignore
 └── tests/
     ├── test_cleaner.py          # 清洗单元测试
@@ -246,11 +251,12 @@ clipboard-cleaner/
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `cleaner.py` | ~430 | 清洗管线核心逻辑 |
-| `tui.py` | ~270 | curses 渲染 + 按键 |
-| `clipboard.py` | ~90 | 剪贴板轮询 |
-| `model.py` | ~100 | 数据结构 + 线程安全状态 |
-| `run.py` | ~60 | 入口 + 信号处理 |
+| `clipboard_cleaner/cleaner/pipeline.py` | ~1340 | 清洗管线核心逻辑 |
+| `clipboard_cleaner/tui/app.py` | ~200 | curses 渲染 + 按键 |
+| `clipboard_cleaner/tui/rendering.py` | ~100 | TUI 纯渲染辅助 |
+| `clipboard_cleaner/clipboard/monitor.py` | ~100 | 剪贴板轮询 |
+| `clipboard_cleaner/state.py` | ~100 | 数据结构 + 线程安全状态 |
+| `clipboard_cleaner/cli.py` | ~70 | 入口 + 信号处理 |
 
 ### 外部依赖
 
@@ -374,7 +380,7 @@ clipboard-cleaner/
 clip
 
 # 纯文本模式（pipe 测试）
-echo '  缩进的文本' | python3 run.py --plain
+echo '  缩进的文本' | python3 -m clipboard_cleaner.cli --plain
 
 # 运行测试
 python3 -m pytest tests/ -v
@@ -382,5 +388,5 @@ python3 -m pytest tests/ -v
 
 Shell alias（`~/.zshrc`）：
 ```bash
-alias clip='cd "$HOME/重要但不同步icloud/02_项目/github项目/clipboard-cleaner" && python3 run.py'
+alias clip='cd "$HOME/重要但不同步icloud/02_项目/github项目/clipboard-cleaner" && python3 -m clipboard_cleaner.cli'
 ```
