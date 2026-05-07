@@ -3,7 +3,7 @@
 import time
 
 from clipboard import _hash_text
-from model import ClipboardItem
+from model import AppState, ClipboardItem
 from tui import _build_display_rows, _clamp_scroll
 from clipboard_cleaner.tui import app as tui_app
 
@@ -40,3 +40,38 @@ def test_clamp_scroll_limits_offset_to_available_rows():
 def test_tui_app_imports_history_limit_for_status_bar():
     """The curses renderer uses MAX_HISTORY when building the status bar."""
     assert tui_app.MAX_HISTORY == 10
+
+
+class FakeScreen:
+    def __init__(self, height: int = 10, width: int = 40):
+        self.height = height
+        self.width = width
+        self.calls: list[tuple] = []
+
+    def erase(self):
+        self.calls.append(('erase',))
+
+    def getmaxyx(self):
+        return self.height, self.width
+
+    def addnstr(self, *args):
+        self.calls.append(('addnstr', args))
+
+    def refresh(self):
+        self.calls.append(('refresh',))
+
+
+def test_tui_render_with_history_item_does_not_crash():
+    state = AppState()
+    state.add_item(_item('hello world'))
+    tui = tui_app.TUI(state, input_queue=None)
+    screen = FakeScreen()
+
+    tui._render(screen)
+
+    rendered_text = ''.join(
+        call[1][2] for call in screen.calls
+        if call[0] == 'addnstr' and len(call[1]) >= 3
+    )
+    assert 'hello world' in rendered_text
+    assert any(call[0] == 'refresh' for call in screen.calls)

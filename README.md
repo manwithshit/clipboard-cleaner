@@ -153,7 +153,7 @@ See [`docs/TECHNICAL_DESIGN.md`](docs/TECHNICAL_DESIGN.md) for details.
 python3 -m pytest tests/ -v
 ```
 
-156 tests, including golden fixtures, cover the cleaning rules with common and edge cases.
+158 tests, including golden fixtures, cover the cleaning rules with common and edge cases.
 
 ## Known limitations
 

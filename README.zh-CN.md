@@ -169,7 +169,7 @@ alias clip='cd /path/to/clipboard-cleaner && python3 -m clipboard_cleaner.cli'
 python3 -m pytest tests/ -v
 ```
 
-包含 156 个测试（含 golden fixture），覆盖清洗规则的常见和边界场景。
+包含 158 个测试（含 golden fixture），覆盖清洗规则的常见和边界场景。
 
 ## 已知限制
 
