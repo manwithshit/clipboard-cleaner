@@ -691,12 +691,22 @@ def _merge_table_cells(base: list[str], continuation: list[str]) -> list[str]:
 
 
 def _merge_box_table_logical_rows(rows: list[list[str]], width: int) -> list[list[str]]:
-    """合并 box 表格中被终端折成多行的逻辑记录。
+    """合并 box 表格中同一记录内的多条视觉行。"""
+    if not rows:
+        return []
 
-    终端表格常把一个数据记录拆成多条视觉行，例如第一列为空白的行负责承载
-    第二/三列续文，下一行才出现行标题。这里按“第一列是否出现新值”保守合并：
-    - 当前行和上一条都有第一列值 → 开始新记录
-    - 否则视为上一条记录的续行，按列拼接
+    current = _fit_row_to_width(rows[0], width)
+    for raw_row in rows[1:]:
+        current = _merge_table_cells(current, _fit_row_to_width(raw_row, width))
+
+    return [current]
+
+
+def _merge_box_table_unseparated_rows(rows: list[list[str]], width: int) -> list[list[str]]:
+    """合并没有横向分隔线的 box 表格视觉续行。
+
+    无分隔线表格只能用第一列是否出现新值做保守判断；带分隔线的表格会在
+    `_box_table_to_narrative` 中按分隔线分组，每组直接合成一条记录。
     """
     logical_rows: list[list[str]] = []
     current: list[str] | None = None
@@ -726,6 +736,7 @@ def _merge_box_table_logical_rows(rows: list[list[str]], width: int) -> list[lis
 _BOX_DATA_OPEN = set('│┃')          # 数据行的左右边界
 _BOX_BORDER_OPEN = set('┌┏├┝└┗')   # 上/中/下边框的起始字符
 _BOX_BORDER_CLOSE = set('┐┓┤┥┘┛')  # 上/中/下边框的结束字符
+_BOX_BORDER_MIDDLE = set('├┝')     # 表头/记录分隔线
 _BOX_BORDER_INNER = set(
     '─━═│┃┌┏┐┓└┗┘┛├┝┤┥┨┩┪┫┬┭┮┯┰┱┲┳┴┵┶┷┸┹┺┻'
     '┼┽┾┿╀╁╂╃╄╅╆╇╈╉╊╋║'
@@ -1000,6 +1011,7 @@ def _box_table_to_narrative(lines: list[str]) -> list[str] | None:
     current_group: list[list[str]] = []
     body_rows: list[list[str]] = []
     width = 0
+    saw_body_separator = False
 
     def flush_group() -> None:
         nonlocal current_group, body_rows
@@ -1013,7 +1025,9 @@ def _box_table_to_narrative(lines: list[str]) -> list[str] | None:
             continue
         # 跳过纯边框行
         if stripped[0] in _BOX_BORDER_OPEN and stripped[-1] in _BOX_BORDER_CLOSE:
-            flush_group()
+            if header is not None and current_group and stripped[0] in _BOX_BORDER_MIDDLE:
+                flush_group()
+                saw_body_separator = True
             continue
         # 数据行：把 │ ┃ 都规范化成 |
         if stripped[0] in _BOX_DATA_OPEN and stripped[-1] in _BOX_DATA_OPEN:
@@ -1026,7 +1040,11 @@ def _box_table_to_narrative(lines: list[str]) -> list[str] | None:
                 else:
                     current_group.append(cells)
 
-    flush_group()
+    if current_group:
+        if saw_body_separator:
+            flush_group()
+        else:
+            body_rows.extend(_merge_box_table_unseparated_rows(current_group, width))
 
     if header is None or not body_rows:
         return None
