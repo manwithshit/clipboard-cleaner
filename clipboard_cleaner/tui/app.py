@@ -3,7 +3,7 @@ from queue import Queue, Empty
 
 import pyperclip
 
-from ..state import AppState
+from ..state import AppState, MAX_HISTORY
 from .rendering import _build_display_rows, _cell_width, _clamp_scroll
 
 
