@@ -75,7 +75,7 @@
 ```bash
 git clone https://github.com/manwithshit/clipboard-cleaner.git
 cd clipboard-cleaner
-pip3 install pyperclip wcwidth
+python3 -m pip install -r requirements-dev.txt
 ```
 
 依赖：
@@ -90,6 +90,12 @@ pip3 install pyperclip wcwidth
 
 ```bash
 python3 run.py
+```
+
+也可以用包模式运行：
+
+```bash
+python3 -m clipboard_cleaner.cli
 ```
 
 界面：
@@ -129,7 +135,7 @@ echo '  缩进的 **加粗** 文本' | python3 run.py --plain
 在 `~/.zshrc` 加：
 
 ```bash
-alias clip='cd /path/to/clipboard-cleaner && python3 run.py'
+alias clip='cd /path/to/clipboard-cleaner && python3 -m clipboard_cleaner.cli'
 ```
 
 ## 设计原则
@@ -144,13 +150,13 @@ alias clip='cd /path/to/clipboard-cleaner && python3 run.py'
 
 ```
 ┌──────────────────┐    ┌─────────────────┐    ┌─────────────┐
-│ pyperclip 轮询    │──▶│ has_format_     │──▶│ clean()     │
-│ (0.2s)           │    │ artifacts() 过滤 │    │ 7 步管线    │
+│ clipboard/monitor│──▶│ has_format_     │──▶│ cleaner/    │
+│ pyperclip 0.2s   │    │ artifacts() 过滤 │    │ pipeline.py │
 └──────────────────┘    └─────────────────┘    └──────┬──────┘
                                                      │ queue
                                                      ▼
                        ┌─────────────────┐    ┌─────────────┐
-                       │ AppState        │◀──│ curses TUI   │
+                       │ state.AppState  │◀──│ tui/app.py   │
                        │ 历史 10 条       │    │ 数字键复制    │
                        └─────────────────┘    └─────────────┘
 ```
@@ -163,7 +169,7 @@ alias clip='cd /path/to/clipboard-cleaner && python3 run.py'
 python3 -m pytest tests/ -v
 ```
 
-包含 109 个单元测试 + 6 组 golden fixture，覆盖所有清洗规则的常见和边界场景。
+包含 156 个测试（含 golden fixture），覆盖清洗规则的常见和边界场景。
 
 ## 已知限制
 
