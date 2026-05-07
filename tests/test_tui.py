@@ -2,9 +2,9 @@
 
 import time
 
-from clipboard import _hash_text
-from model import AppState, ClipboardItem
-from tui import _build_display_rows, _clamp_scroll
+from clipboard_cleaner.clipboard import _hash_text
+from clipboard_cleaner.state import AppState, ClipboardItem
+from clipboard_cleaner.tui import _build_display_rows, _clamp_scroll
 from clipboard_cleaner.tui import app as tui_app
 
 

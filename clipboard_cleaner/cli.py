@@ -1,8 +1,8 @@
 """Clipboard Cleaner 入口。
 
 用法:
-    python run.py          # 启动 TUI 模式
-    python run.py --plain  # 纯文本模式（无 curses）
+    python -m clipboard_cleaner.cli          # 启动 TUI 模式
+    python -m clipboard_cleaner.cli --plain  # 纯文本模式（无 curses）
 """
 
 import argparse

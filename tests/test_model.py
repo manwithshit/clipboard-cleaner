@@ -4,8 +4,8 @@ import time
 import hashlib
 from queue import Queue
 
-from model import ClipboardItem, AppState
-from clipboard import _hash_text
+from clipboard_cleaner.state import ClipboardItem, AppState
+from clipboard_cleaner.clipboard import _hash_text
 
 
 def _make_item(text: str) -> ClipboardItem:

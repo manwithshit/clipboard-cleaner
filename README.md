@@ -91,12 +91,6 @@ Requirements:
 ### TUI mode (recommended)
 
 ```bash
-python3 run.py
-```
-
-Package-style execution is also supported:
-
-```bash
 python3 -m clipboard_cleaner.cli
 ```
 
@@ -113,7 +107,7 @@ python3 -m clipboard_cleaner.cli
 ### Plain mode (pipe testing)
 
 ```bash
-echo '  indented **bold** text' | python3 run.py --plain
+echo '  indented **bold** text' | python3 -m clipboard_cleaner.cli --plain
 ```
 
 ### Recommended alias
