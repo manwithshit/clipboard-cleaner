@@ -5,6 +5,7 @@ import time
 from clipboard import _hash_text
 from model import ClipboardItem
 from tui import _build_display_rows, _clamp_scroll
+from clipboard_cleaner.tui import app as tui_app
 
 
 def _item(text: str) -> ClipboardItem:
@@ -34,3 +35,8 @@ def test_clamp_scroll_limits_offset_to_available_rows():
     assert _clamp_scroll(3, total_rows=10, visible_rows=4) == 3
     assert _clamp_scroll(99, total_rows=10, visible_rows=4) == 6
     assert _clamp_scroll(5, total_rows=3, visible_rows=4) == 0
+
+
+def test_tui_app_imports_history_limit_for_status_bar():
+    """The curses renderer uses MAX_HISTORY when building the status bar."""
+    assert tui_app.MAX_HISTORY == 10
