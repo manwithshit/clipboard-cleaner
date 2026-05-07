@@ -391,6 +391,33 @@ def test_box_table_multiline_cells_merge_into_logical_rows():
     assert '5. ' not in result
 
 
+def test_box_table_split_filename_cells_merge_within_separator_group():
+    """横向分隔线之间的多条视觉行应合并成一条记录，即使第一列也被拆断。"""
+    raw = '''┌────────────┬───────────────────────────┬────────────────────┐
+│   原文件   │          新位置           │       新名称       │
+├────────────┼───────────────────────────┼────────────────────┤
+│ IMG_2795.J │ ~/Desktop/个人/01_证件与  │ 护照_王应韧.JPG    │
+│ PG         │ 身份/                     │                    │
+├────────────┼───────────────────────────┼────────────────────┤
+│ IMG_2283.J │ ~/Desktop/个人/01_证件与  │ 英国签证_王应韧.JP │
+│ PG         │ 身份/                     │ G                  │
+├────────────┼───────────────────────────┼────────────────────┤
+│ IMG_2282.J │ ~/Desktop/个人/02_签证_出 │ 集体户口_余杭五常. │
+│ PG         │ 入境/                     │ JPG                │
+└────────────┴───────────────────────────┴────────────────────┘'''
+    result = clean(raw)
+
+    assert '1. 原文件：IMG_2795.J PG' in result
+    assert '新位置：~/Desktop/个人/01_证件与 身份/' in result
+    assert '新名称：护照_王应韧.JPG' in result
+    assert '2. 原文件：IMG_2283.J PG' in result
+    assert '新名称：英国签证_王应韧.JP G' in result
+    assert '3. 原文件：IMG_2282.J PG' in result
+    assert '新位置：~/Desktop/个人/02_签证_出 入境/' in result
+    assert '新名称：集体户口_余杭五常. JPG' in result
+    assert '4. ' not in result
+
+
 def test_remove_claude_continuation_indent():
     """清洗首行无缩进、后续行带 2 空格的硬换行。"""
     raw = 'Codex 改得不错。5\n  个发现都是真实问题\n  ，修复方案合理'
