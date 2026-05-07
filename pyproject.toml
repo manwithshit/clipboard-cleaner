@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clipboard-cleaner"
+version = "0.1.0"
+description = "macOS clipboard cleaner panel for Claude Code / Ghostty terminal output."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "pyperclip",
+    "wcwidth",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+]
+
+[project.scripts]
+clipboard-cleaner = "clipboard_cleaner.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

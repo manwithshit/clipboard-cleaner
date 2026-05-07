@@ -77,7 +77,7 @@ See the docs (https://git-scm.com).
 ```bash
 git clone https://github.com/manwithshit/clipboard-cleaner.git
 cd clipboard-cleaner
-pip3 install pyperclip wcwidth
+python3 -m pip install -r requirements-dev.txt
 ```
 
 Requirements:
@@ -92,6 +92,12 @@ Requirements:
 
 ```bash
 python3 run.py
+```
+
+Package-style execution is also supported:
+
+```bash
+python3 -m clipboard_cleaner.cli
 ```
 
 | Key | Action |
@@ -115,7 +121,7 @@ echo '  indented **bold** text' | python3 run.py --plain
 In your `~/.zshrc`:
 
 ```bash
-alias clip='cd /path/to/clipboard-cleaner && python3 run.py'
+alias clip='cd /path/to/clipboard-cleaner && python3 -m clipboard_cleaner.cli'
 ```
 
 ## Design principles
@@ -128,13 +134,13 @@ alias clip='cd /path/to/clipboard-cleaner && python3 run.py'
 
 ```
 ┌──────────────────┐    ┌─────────────────┐    ┌─────────────┐
-│ pyperclip poll   │──▶│ has_format_     │──▶│ clean()     │
-│ (0.2s)           │    │ artifacts() gate │    │ 7-step pipe │
+│ clipboard/monitor│──▶│ has_format_     │──▶│ cleaner/    │
+│ pyperclip 0.2s   │    │ artifacts() gate │    │ pipeline.py │
 └──────────────────┘    └─────────────────┘    └──────┬──────┘
                                                      │ queue
                                                      ▼
                        ┌─────────────────┐    ┌─────────────┐
-                       │ AppState        │◀──│ curses TUI   │
+                       │ state.AppState  │◀──│ tui/app.py   │
                        │ history 10 max  │    │ digit-copy   │
                        └─────────────────┘    └─────────────┘
 ```
@@ -147,7 +153,7 @@ See [`docs/TECHNICAL_DESIGN.md`](docs/TECHNICAL_DESIGN.md) for details.
 python3 -m pytest tests/ -v
 ```
 
-109 unit tests + 6 golden fixtures covering every cleaning rule with common and edge cases.
+156 tests, including golden fixtures, cover the cleaning rules with common and edge cases.
 
 ## Known limitations
 
