@@ -668,6 +668,60 @@ def _table_to_narrative(lines: list[str]) -> list[str] | None:
     return _rows_to_narrative(headers, parsed_rows[2:])
 
 
+def _fit_row_to_width(row: list[str], width: int) -> list[str]:
+    """把表格行补齐/截断到指定列数。"""
+    if len(row) > width:
+        return row[:width - 1] + [' '.join(row[width - 1:])]
+    if len(row) < width:
+        return row + [''] * (width - len(row))
+    return row
+
+
+def _merge_table_cells(base: list[str], continuation: list[str]) -> list[str]:
+    """把同一条记录的视觉续行合并到已有单元格。"""
+    merged: list[str] = []
+    for left, right in zip(base, continuation):
+        left = left.strip()
+        right = right.strip()
+        if left and right:
+            merged.append(f'{left} {right}')
+        else:
+            merged.append(left or right)
+    return merged
+
+
+def _merge_box_table_logical_rows(rows: list[list[str]], width: int) -> list[list[str]]:
+    """合并 box 表格中被终端折成多行的逻辑记录。
+
+    终端表格常把一个数据记录拆成多条视觉行，例如第一列为空白的行负责承载
+    第二/三列续文，下一行才出现行标题。这里按“第一列是否出现新值”保守合并：
+    - 当前行和上一条都有第一列值 → 开始新记录
+    - 否则视为上一条记录的续行，按列拼接
+    """
+    logical_rows: list[list[str]] = []
+    current: list[str] | None = None
+
+    for raw_row in rows:
+        row = _fit_row_to_width(raw_row, width)
+        if current is None:
+            current = row
+            continue
+
+        current_has_key = bool(current[0].strip()) if current else False
+        row_has_key = bool(row[0].strip()) if row else False
+
+        if current_has_key and row_has_key:
+            logical_rows.append(current)
+            current = row
+        else:
+            current = _merge_table_cells(current, row)
+
+    if current is not None:
+        logical_rows.append(current)
+
+    return logical_rows
+
+
 # Box-drawing 表格识别
 _BOX_DATA_OPEN = set('│┃')          # 数据行的左右边界
 _BOX_BORDER_OPEN = set('┌┏├┝└┗')   # 上/中/下边框的起始字符
@@ -942,27 +996,43 @@ def _merge_wrapped_box_table_lines(lines: list[str]) -> list[str]:
 
 def _box_table_to_narrative(lines: list[str]) -> list[str] | None:
     """把 box-drawing 表格转成数字条目列表。"""
-    data_rows: list[list[str]] = []
+    header: list[str] | None = None
+    current_group: list[list[str]] = []
+    body_rows: list[list[str]] = []
+    width = 0
+
+    def flush_group() -> None:
+        nonlocal current_group, body_rows
+        if current_group:
+            body_rows.extend(_merge_box_table_logical_rows(current_group, width))
+            current_group = []
+
     for line in lines:
         stripped = line.strip()
         if not stripped:
             continue
         # 跳过纯边框行
         if stripped[0] in _BOX_BORDER_OPEN and stripped[-1] in _BOX_BORDER_CLOSE:
+            flush_group()
             continue
         # 数据行：把 │ ┃ 都规范化成 |
         if stripped[0] in _BOX_DATA_OPEN and stripped[-1] in _BOX_DATA_OPEN:
             normalized = re.sub(r'[│┃]', '|', stripped)
             cells = [c.strip() for c in normalized.strip('|').split('|')]
             if cells:
-                data_rows.append(cells)
+                if header is None:
+                    header = cells
+                    width = len(header)
+                else:
+                    current_group.append(cells)
 
-    if len(data_rows) < 2:
+    flush_group()
+
+    if header is None or not body_rows:
         return None
 
-    headers = [_normalize_table_cell(c) for c in data_rows[0]]
-    body = data_rows[1:]
-    return _rows_to_narrative(headers, body)
+    headers = [_normalize_table_cell(c) for c in header]
+    return _rows_to_narrative(headers, body_rows)
 
 
 def clean(raw_text: str) -> str:

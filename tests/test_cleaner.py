@@ -356,6 +356,41 @@ def test_wrapped_box_quote_does_not_pull_in_list():
     assert '- 这是独立列表项' in result
 
 
+def test_box_table_multiline_cells_merge_into_logical_rows():
+    """box 表格的多行单元格应合并为同一条记录，而不是拆成多条。"""
+    raw = '''┌────────────┬────────────────────┬────────────────────────────┐
+│    模式    │        现状        │            评价            │
+├────────────┼────────────────────┼────────────────────────────┤
+│            │ 有隐式三层：入口 → │                            │
+│ 分层架构   │  Monitor → Cleaner │ ✅ 合理                    │
+│            │  → TUI             │                            │
+├────────────┼────────────────────┼────────────────────────────┤
+│ 依赖注入   │ 无显式 DI，直接    │ ⚠️                         │
+│            │ import             │ 可接受（工具类项目不需要） │
+├────────────┼────────────────────┼────────────────────────────┤
+│            │ 主线程 TUI +       │                            │
+│ 线程模型   │ 后台线程轮询，通过 │ ✅ 线程安全，有锁保护      │
+│            │  queue.Queue 通信  │                            │
+├────────────┼────────────────────┼────────────────────────────┤
+│ 防反馈循环 │ 程序复制后 1.5s    │ ✅ 设计巧妙                │
+│            │ 窗口抑制           │                            │
+└────────────┴────────────────────┴────────────────────────────┘'''
+    result = clean(raw)
+
+    assert result.count('\n\n') == 3
+    assert '1. 模式：分层架构' in result
+    assert '现状：有隐式三层：入口 → Monitor → Cleaner → TUI' in result
+    assert '评价：✅ 合理' in result
+    assert '2. 模式：依赖注入' in result
+    assert '现状：无显式 DI，直接 import' in result
+    assert '评价：⚠️ 可接受（工具类项目不需要）' in result
+    assert '3. 模式：线程模型' in result
+    assert '现状：主线程 TUI + 后台线程轮询，通过 queue.Queue 通信' in result
+    assert '4. 模式：防反馈循环' in result
+    assert '现状：程序复制后 1.5s 窗口抑制' in result
+    assert '5. ' not in result
+
+
 def test_remove_claude_continuation_indent():
     """清洗首行无缩进、后续行带 2 空格的硬换行。"""
     raw = 'Codex 改得不错。5\n  个发现都是真实问题\n  ，修复方案合理'
