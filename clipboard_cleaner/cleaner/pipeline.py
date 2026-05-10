@@ -947,10 +947,24 @@ def _merge_wrapped_box_table_lines(lines: list[str]) -> list[str]:
         merged_body = stripped
         is_complete = _is_box_table_line(leading_indent + merged_body)
 
-        # 防误吞引用装饰：以 │/┃ 开头但不是完整表格行时，
-        # 检查下一行是否含 │/┃。如果不含，说明这是引用装饰而非表格碎片
-        # （例如 `│ 引用文本第一行` 后面是 `引用文本第二行`）。
+        # 防误吞引用装饰：以 │/┃ 开头但不是完整表格行时，需要排除
+        # 多种"其实是引用，不是表格碎片"的形态：
+        #   (a) 单层引用如 `│ 引用文本`（装饰之外没有列分隔符 │）
+        #   (b) 嵌套引用如 `│ │ 嵌套文本`（多个 │ 都集中在装饰部分）
+        #   (c) 下一行完全无 │（说明前一行也是引用装饰）
+        # 真正的表格碎片：装饰外还会出现 │（列分隔符）
         if not is_complete and stripped[0] in _BOX_DATA_OPEN:
+            quote_match = _NESTED_QUOTE.match(line)
+            if quote_match:
+                rest_after_decor = line[quote_match.end():]
+                # 装饰之后不再出现 │/|/┃ → 是纯引用，不是表格碎片
+                if not any(
+                    c in _BOX_DATA_OPEN or c == '|' for c in rest_after_decor
+                ):
+                    result.append(line)
+                    i += 1
+                    continue
+            # 兜底：下一行完全没 │ → 当前行也不是表格碎片
             next_idx = i + 1
             if next_idx >= len(lines):
                 result.append(line)

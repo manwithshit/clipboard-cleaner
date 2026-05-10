@@ -1215,3 +1215,27 @@ def test_quote_preserves_inner_indent_nested():
     result = clean(raw)
     # 应该是 〔引²〕    有 4 空格缩进的内容
     assert result == '〔引²〕    有 4 空格缩进的内容'
+
+
+# ============================================================
+# 实战回归：连续 │ 引用行不被误判为"折断的 box 表格"
+# ============================================================
+
+def test_consecutive_pipe_quote_lines_not_treated_as_box_table():
+    """`│` 开头的多行引用（含嵌套）必须保留为引用，
+    不能被 _merge_wrapped_box_table_lines 错误地合并成一行。"""
+    raw = (
+        '  │ "吾乃常山赵子龙也！"\n'
+        '  │  ——赵云长坂坡七进七出\n'
+        '  │ │ 此战斩敌五十余，救出幼主阿斗\n'
+        '  │ │  被曹操赞叹"真虎将也"'
+    )
+    result = clean(raw)
+    # 不能含残留的装饰 │
+    assert '│' not in result
+    # 1 层和 2 层引用各自独立
+    assert '〔引〕' in result
+    assert '〔引²〕' in result
+    # 1 层和 2 层不能在同一行
+    for line in result.split('\n'):
+        assert not ('〔引〕' in line and '〔引²〕' in line)
