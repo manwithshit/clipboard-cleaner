@@ -1221,6 +1221,23 @@ def test_quote_preserves_inner_indent_nested():
 # 实战回归：连续 │ 引用行不被误判为"折断的 box 表格"
 # ============================================================
 
+def test_yaml_frontmatter_with_empty_key_followed_by_unindented_value():
+    """AI 生成的非标 YAML：空值 key（summary:）后接无缩进的值文本。"""
+    raw = (
+        '---\n'
+        'title: 赤壁之战\n'
+        'summary:\n'
+        '孙刘联军大破曹军\n'
+        '---\n'
+        '正文'
+    )
+    result = clean(raw)
+    assert 'title' not in result
+    assert 'summary' not in result
+    assert '孙刘联军' not in result
+    assert result == '正文'
+
+
 def test_consecutive_pipe_quote_lines_not_treated_as_box_table():
     """`│` 开头的多行引用（含嵌套）必须保留为引用，
     不能被 _merge_wrapped_box_table_lines 错误地合并成一行。"""

@@ -209,26 +209,39 @@ def _looks_like_yaml_frontmatter(body_lines: list[str]) -> bool:
     - 至少有一个 key:value 行
     - 除了 key:value、缩进续行、注释、空行外，没有其他类型的内容
       （否则可能是普通文本被两个 `---` 包住，应作为水平分割线处理）
+
+    宽松扩展（AI 生成的常见非标 YAML）：
+    - 空值 key（如 `summary:`）后接一行无缩进文本 → 视为该 key 的值
     """
     if not body_lines:
         return False
 
     has_key_value = False
     last_was_key = False
+    last_was_empty_key = False
 
     for line in body_lines:
         stripped = line.strip()
         if not stripped:
             last_was_key = False
+            last_was_empty_key = False
             continue
         if _YAML_COMMENT_LINE.match(line):
             continue
         if _YAML_KEY_LINE.match(line):
             has_key_value = True
             last_was_key = True
+            # 检测是否为"空值 key"：冒号后没有内容
+            colon_idx = stripped.find(':')
+            last_was_empty_key = not stripped[colon_idx + 1:].strip()
             continue
         # 缩进续行只在前一行是 key 时合法
         if last_was_key and _YAML_CONT_LINE.match(line):
+            continue
+        # 空值 key 紧跟的无缩进文本视为该 key 的值（AI 常见写法）
+        if last_was_empty_key:
+            last_was_empty_key = False
+            last_was_key = False
             continue
         # 出现非 YAML 形态的内容，整体视为非 frontmatter
         return False
