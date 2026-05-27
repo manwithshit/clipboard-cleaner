@@ -23,6 +23,7 @@ class TUI:
         self.status_time: float = 0
         self.scroll_offset: int = 0
         self._dirty = True  # 脏标记：只在有变化时重渲染
+        self._last_size: tuple[int, int] = (0, 0)  # 追踪窗口尺寸变化
 
     def run(self):
         """主循环。使用 curses.wrapper 保证退出时恢复终端。"""
@@ -49,6 +50,7 @@ class TUI:
             for i in range(1, 5):
                 curses.init_pair(i, 0, 0)
 
+        self._last_size = stdscr.getmaxyx()
         self._render(stdscr)
 
         while True:
@@ -60,13 +62,23 @@ class TUI:
                 # 状态消息 3 秒后淡出也算一次变化
                 if time.time() - self.status_time > 3 and self.status_message != '监听中...':
                     self._set_status('监听中...')
+                # 兜底检测窗口尺寸变化（某些终端不发 KEY_RESIZE）
+                cur_size = stdscr.getmaxyx()
+                if cur_size != self._last_size:
+                    self._last_size = cur_size
+                    self._dirty = True
                 if self._dirty:
                     self._render(stdscr)
                     self._dirty = False
                 continue
 
+            # 终端窗口大小变化
+            if key == curses.KEY_RESIZE:
+                self._last_size = stdscr.getmaxyx()
+                self._dirty = True
+
             # 按键处理
-            if key == ord('q') or key == ord('Q'):
+            elif key == ord('q') or key == ord('Q'):
                 break
             elif key == ord('c') or key == ord('C'):
                 self.state.clear()
