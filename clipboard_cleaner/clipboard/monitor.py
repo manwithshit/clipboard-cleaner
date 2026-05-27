@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import gc
 import time
 import hashlib
 import threading
@@ -15,6 +16,10 @@ import pyperclip
 
 from ..state import ClipboardItem, AppState
 from ..cleaner import clean, has_format_artifacts
+
+# 每隔多少个轮询周期执行一次 gc.collect()，防止长期运行时内存碎片堆积。
+# 按 poll_interval=0.2s 计算，300 周期 ≈ 60 秒。
+_GC_EVERY_N_CYCLES = 300
 
 
 def _hash_text(text: str) -> str:
@@ -57,12 +62,20 @@ class ClipboardMonitor:
         except Exception:
             self._last_content = ''
 
+        cycle = 0
+
         while self._running:
             try:
                 time.sleep(self.poll_interval)
                 current = pyperclip.paste()
             except Exception:
+                cycle += 1
                 continue
+
+            cycle += 1
+            if cycle >= _GC_EVERY_N_CYCLES:
+                cycle = 0
+                gc.collect()
 
             if not current or current == self._last_content:
                 continue

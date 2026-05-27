@@ -1,3 +1,4 @@
+import time
 import curses
 from queue import Queue, Empty
 
@@ -21,6 +22,7 @@ class TUI:
         self.status_message: str = '监听中...'
         self.status_time: float = 0
         self.scroll_offset: int = 0
+        self._dirty = True  # 脏标记：只在有变化时重渲染
 
     def run(self):
         """主循环。使用 curses.wrapper 保证退出时恢复终端。"""
@@ -55,7 +57,12 @@ class TUI:
             if key == -1:
                 # 无键盘输入，检查是否有新条目
                 self._check_new_items()
-                self._render(stdscr)
+                # 状态消息 3 秒后淡出也算一次变化
+                if time.time() - self.status_time > 3 and self.status_message != '监听中...':
+                    self._set_status('监听中...')
+                if self._dirty:
+                    self._render(stdscr)
+                    self._dirty = False
                 continue
 
             # 按键处理
@@ -67,18 +74,24 @@ class TUI:
                 self._set_status('已清空')
             elif key in (curses.KEY_DOWN, ord('j'), ord('J')):
                 self.scroll_offset += 1
+                self._dirty = True
             elif key in (curses.KEY_UP, ord('k'), ord('K')):
                 self.scroll_offset -= 1
+                self._dirty = True
             elif key == curses.KEY_NPAGE:
                 height, _ = stdscr.getmaxyx()
                 self.scroll_offset += max(1, height - 3)
+                self._dirty = True
             elif key == curses.KEY_PPAGE:
                 height, _ = stdscr.getmaxyx()
                 self.scroll_offset -= max(1, height - 3)
+                self._dirty = True
             elif key == curses.KEY_HOME:
                 self.scroll_offset = 0
+                self._dirty = True
             elif key == curses.KEY_END:
                 self.scroll_offset = 10**9
+                self._dirty = True
             elif ord('0') <= key <= ord('9'):
                 index = key - ord('0')
                 item = self.state.get_item(index)
@@ -92,7 +105,9 @@ class TUI:
                 else:
                     self._set_status(f'没有 [{index}] 条目')
 
-            self._render(stdscr)
+            if self._dirty:
+                self._render(stdscr)
+                self._dirty = False
 
     def _check_new_items(self):
         """从队列中取出新条目（不阻塞）。"""
@@ -109,11 +124,11 @@ class TUI:
 
     def _set_status(self, msg: str):
         self.status_message = msg
-        self.status_time = __import__('time').time()
+        self.status_time = time.time()
+        self._dirty = True
 
     def _render(self, stdscr):
         """渲染整个界面。"""
-        import time
         stdscr.erase()
         height, width = stdscr.getmaxyx()
 
@@ -177,13 +192,9 @@ class TUI:
                     pass
 
         # 状态栏
-        import time
         status_y = height - 1
         try:
             count = len(self.state)
-            # 状态消息 3 秒后淡出
-            if time.time() - self.status_time > 3:
-                self.status_message = '监听中...'
             scroll_hint = ''
             if items:
                 rows = _build_display_rows(items, width)
