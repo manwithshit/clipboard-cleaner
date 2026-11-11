@@ -1,3 +1,8 @@
+<p align="center">
+  <img src="./assets/readme/hero-portfolio.webp" width="100%" alt="clipboard-cleaner — illustrated project cover">
+</p>
+<p align="center"><sub>AI-illustrated cover; see the real screenshots below for the actual interface.</sub></p>
+
 # Clipboard Cleaner
 
 **English** · [中文](README.zh-CN.md)
